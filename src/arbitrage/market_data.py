@@ -18,7 +18,7 @@ from .models import Asset, TRADE_HBAR
 RPC = "https://mainnet.hashio.io/api"
 MIRROR = "https://mainnet-public.mirrornode.hedera.com/api/v1"
 KUCOIN = "https://api.kucoin.com"
-MAX_SKEW = timedelta(seconds=2)
+MAX_SKEW = timedelta(seconds=10)
 MAX_AGE = timedelta(seconds=10)
 TRADE_UNITS = TRADE_HBAR * 10**Asset.HBAR.decimals
 
