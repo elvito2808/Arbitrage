@@ -56,3 +56,21 @@ writable state are outside the repository. It routes console messages to
 journald, whose size and retention are managed by the future host operator.
 Structured health history remains bounded in SQLite. No install or service
 activation was performed for P06.
+
+### SQLite schema 4 upgrade
+
+With the foreground worker stopped, take a private, consistent SQLite backup
+before updating the simulator. Use SQLite's backup API or a cold backup taken
+with all connections closed. Keep the copied simulation configuration with the
+backup. Run `arbitrage --data-dir /absolute/private/path init --config /path/to/approved.toml`
+with the new version before using the other commands. Initialization takes the
+runtime owner lock and adds the ledger guards in a single SQLite transaction.
+Existing balances, ledger rows, reservations and simulation journals are
+retained. The upgrade does not repair pre-existing inconsistencies.
+
+If migration fails, SQLite rolls back the schema transaction. Keep the original
+database and backup for diagnosis. For an application rollback, restore the
+matching pre-upgrade backup while the worker is stopped. Do not edit the schema
+version or remove the ledger guards to force a downgrade. After a successful
+upgrade, use `status` and `report` to check balances and reconciliation before
+resuming an authorized simulation.

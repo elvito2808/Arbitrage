@@ -11,7 +11,7 @@ from .models import (
     LedgerEntry, Opportunity, Reason, Reservation, Worker, WorkerState,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = (
     """CREATE TABLE balances (
@@ -105,6 +105,22 @@ _SIMULATION_SCHEMA = (
 )
 
 
+_LEDGER_SCHEMA = (
+    """CREATE TRIGGER keep_ledger_update
+       BEFORE UPDATE ON ledger
+       BEGIN SELECT RAISE(ABORT, 'posted ledger is append-only'); END""",
+    """CREATE TRIGGER keep_ledger_delete
+       BEFORE DELETE ON ledger
+       BEGIN SELECT RAISE(ABORT, 'posted ledger is append-only'); END""",
+    # REPLACE can delete without running DELETE triggers on ordinary connections.
+    # The ledger has two unique keys: its declared ID and its implicit rowid.
+    """CREATE TRIGGER keep_ledger_insert
+       BEFORE INSERT ON ledger
+       WHEN EXISTS (SELECT 1 FROM ledger WHERE id = NEW.id OR rowid = NEW.rowid)
+       BEGIN SELECT RAISE(ABORT, 'posted ledger is append-only'); END""",
+)
+
+
 class Storage:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -114,9 +130,11 @@ class Storage:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version == SCHEMA_VERSION:
                 return
-            if version not in (0, 1, 2):
+            if version not in (0, 1, 2, 3):
                 raise ValueError(f"unsupported SQLite schema version {version}")
-            for minimum_version, statements in enumerate((_SCHEMA, _ANALYSIS_SCHEMA, _SIMULATION_SCHEMA)):
+            for minimum_version, statements in enumerate(
+                (_SCHEMA, _ANALYSIS_SCHEMA, _SIMULATION_SCHEMA, _LEDGER_SCHEMA)
+            ):
                 if version <= minimum_version:
                     for statement in statements:
                         db.execute(statement)
