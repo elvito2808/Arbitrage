@@ -1,0 +1,51 @@
+Supplemental independent QA, 2026-11-26 UTC
+Dispatch https://github.com/elvito2808/Arbitrage/issues/16#issuecomment-7182526679
+Reviewed main baseline 0b06c49eee68ff9cc6e25cec99bce5ef0baf6bea
+QA head fcc0e53ab777edcdf290bedfc7916413a11b48ef
+QA retest report head 22474bcbe6f7aeb6f6b4ad711a0c496c43871486
+Market correction head f7fab71523a02fc84387649fab25528372ee5c84
+Ledger correction head f99f885e7c3a0c37ba38ec35cd59824a383d4d62
+Combined disposable test base 5d0446fff5069481ca09ecf4faed18587a3c748b
+Combined base tree 9a152032f032d4db479958a38d88cd5729a5be8f
+Original QA tree 2e9791bc16fe41fedb1b78d6859c70bbf0611f17
+Supplemental tests overlaid on the combined base and compared to publication.
+
+git ls-remote origin refs/heads/main 'refs/pull/1[5789]/head'
+Exit 0. All refs matched the pins before continuation.
+
+Commands from the disposable test checkout:
+python3.12 -VV
+python3.12 -m venv ../venv
+../venv/bin/python -m pip install --disable-pip-version-check '.[test]' > ../install.log
+../venv/bin/python -m pip check
+Exit 0 for each during initial installation. The authorized continuation reused
+this isolated, cleanly installed environment. Installed source comparison matched
+all 14 modules. Linux, Python 3.12.14, SQLite 3.53.1, pytest 9.2.0,
+arbitrage-simulation 0.1.0, aiohttp 3.14.5, pydantic 2.14.4, openpyxl 3.1.5.
+
+First attempt:
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest -q tests/qa/test_p07_supplemental_storage.py tests/qa/test_p07_supplemental_races.py -x
+Exit 1. Two SQLite cases passed. Stop/restart race stopped on a Row vs tuple
+assertion in the new harness. No production defect inferred.
+
+Authorized second attempt:
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest -q -x tests/qa/test_p07_supplemental_storage.py tests/qa/test_p07_supplemental_races.py
+Exit 0. 5 passed in 0.47s.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest -q -x tests/qa/test_p07_integration.py::test_recorded_shapes_through_foreground_and_cli
+Exit 0. 1 passed in 0.25s. Both directions gas_unknown. Zero admissions, holds,
+executions, postings and balance changes.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest -q -x tests/qa
+Exit 0. 51 passed in 3.35s.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest -q -rs -x
+Exit 0. 209 passed, 3 skipped in 4.90s. All skips were opt-in network probes.
+
+../venv/bin/python -m pip check
+Exit 0. No broken requirements found.
+
+git diff --check 0b06c49 HEAD
+git diff --exit-code fcc0e53 -- tests/qa
+git diff --exit-code 22474bc -- project/reports/ARB-047-055-retest.md project/evidence/ARB-047-055-retest
+Exit 0 for each. No whitespace errors or changes to existing QA or PR #19 evidence.
