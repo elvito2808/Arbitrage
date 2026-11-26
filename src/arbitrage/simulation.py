@@ -128,6 +128,7 @@ class SimulationEngine(OpportunityCoordinator):
     _scenario = Scenario()
     _sleep: Callable[[float], Awaitable[None]] = staticmethod(asyncio.sleep)
     _public_simulation = False
+    recovery_gate: Callable[[Transaction], bool] | None = None
 
     @classmethod
     def from_public(
@@ -337,6 +338,8 @@ class SimulationEngine(OpportunityCoordinator):
 
     def _advance(self, trade_id: str) -> tuple[str | None, datetime | None]:
         with self.storage.transaction() as tx:
+            if self.recovery_gate is not None and not self.recovery_gate(tx):
+                return None, None
             row = tx.unresolved_simulation(NETWORK)
             if row is None or row["id"] != trade_id or row["status"] == "manual_review":
                 return tx.simulation_status(trade_id), None
