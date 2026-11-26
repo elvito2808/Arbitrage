@@ -21,7 +21,11 @@ def smoke(executable: Path, config: Path) -> None:
             )
             return completed.stdout
 
+        database_uri = f"{(state / 'state.sqlite3').as_uri()}?mode=ro"
+        balance_query = "SELECT holding, total_units, reserved_units FROM balances ORDER BY holding"
         run("init", "--config", str(config))
+        with sqlite3.connect(database_uri, uri=True) as database:
+            opening_balances = database.execute(balance_query).fetchall()
         before = json.loads(run("status"))
         run("recover")
         after = json.loads(run("status"))
@@ -38,7 +42,9 @@ def smoke(executable: Path, config: Path) -> None:
         with ZipFile(state / "report.xlsx") as workbook:
             if workbook.testzip() is not None or "xl/workbook.xml" not in workbook.namelist():
                 raise RuntimeError("invalid workbook")
-        with sqlite3.connect(f"{(state / 'state.sqlite3').as_uri()}?mode=ro", uri=True) as database:
+        with sqlite3.connect(database_uri, uri=True) as database:
+            if database.execute(balance_query).fetchall() != opening_balances:
+                raise RuntimeError("idle recovery or reporting changed balances")
             if database.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                 raise RuntimeError("SQLite integrity check failed")
             if database.execute("PRAGMA foreign_key_check").fetchall():

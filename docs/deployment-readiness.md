@@ -56,7 +56,10 @@ transports and disposable state.
 For static systemd verification, copy the example to a disposable directory
 as `arbitrage.service`. Substitute only the `ExecStart` executable path
 with the installed test executable and run `systemd-analyze verify` on the
-copy. This validates syntax and executable resolution. Host access, service
+copy. If system-mode verification requires unavailable runtime-directory access,
+use a disposable `XDG_RUNTIME_DIR` and `systemd-analyze --user --generators=no verify`
+for a limited parser check. Record the mode and result. This validates syntax
+and executable resolution in the selected scope. Host access, service
 identity, sandboxing, restart limits and journal delivery under PID 1 require
 a separately authorized target-host check.
 
