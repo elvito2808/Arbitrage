@@ -1,4 +1,4 @@
-"""Persistent foreground supervision for the analysis-only public engine."""
+"""Persistent foreground supervision for the simulation engine."""
 
 import asyncio
 import fcntl
@@ -143,7 +143,10 @@ class Runtime:
             if row and row["state"] in ("running", "paused") and self._expired(row, now):
                 self._transition(tx, row, "expired", now)
                 row = self.latest(tx)
-            if action == "recover" and (row is None or row["state"] != "running"):
+            pending = tx.unresolved_simulation(NETWORK) if action == "recover" else None
+            drain_expired = (row is not None and row["state"] == "expired"
+                             and pending is not None and pending["status"] == "active")
+            if action == "recover" and not drain_expired and (row is None or row["state"] != "running"):
                 return None
             if tx._db.execute("SELECT 1 FROM runtime_stop_latch").fetchone():
                 raise ValueError("emergency stop is latched")
@@ -160,7 +163,7 @@ class Runtime:
                 self._transition(tx, row, "running", now)
             else:
                 expected = "paused" if action == "resume" else "running"
-                if row is None or row["state"] != expected:
+                if row is None or (row["state"] != expected and not drain_expired):
                     return None
                 self.session_id = row["id"]
                 worker_id = row["worker_id"]
@@ -239,14 +242,20 @@ class Runtime:
                 session["state"] = "expired"
             health = tx._db.execute("SELECT payload FROM runtime_health WHERE id=1").fetchone()
             unresolved = tx.unresolved_simulation(NETWORK)
+            emergency = bool(tx._db.execute("SELECT 1 FROM runtime_stop_latch").fetchone())
+            unsettled = None
+            if unresolved:
+                unsettled = ("manual review required" if emergency or unresolved["status"] == "manual_review"
+                             else "pending recovery")
             return {
-                "mode": "public analysis only", "session": session,
+                "mode": "simulation", "session": session,
                 "foreground_owner_present": owner_present,
-                "emergency_latched": bool(tx._db.execute("SELECT 1 FROM runtime_stop_latch").fetchone()),
+                "emergency_latched": emergency,
                 "analysis_cycles": tx._db.execute("SELECT count(*) FROM analysis_cycles").fetchone()[0],
                 "simulated_trades": tx._db.execute("SELECT count(*) FROM simulated_trades").fetchone()[0],
                 "workers": {worker: tx.worker(worker).state for worker in WORKERS},
-                "unsettled": "manual review required" if unresolved else None,
+                "unsettled": unsettled,
+                "execution_status": unresolved["status"] if unresolved else "idle",
                 "health": json.loads(health["payload"]) if health else None,
             }
 
@@ -255,9 +264,12 @@ class Runtime:
         with self.storage.transaction() as tx:
             row = tx._db.execute("SELECT payload FROM runtime_health WHERE id=1").fetchone()
             previous = json.loads(row["payload"]) if row else {}
+            last_ws_update = engine.cex.depth_stream.last_valid_received_at
             health = {
+                "ws_last_valid_received_at": last_ws_update.isoformat() if last_ws_update else None,
                 "observed_at": now.isoformat(),
-                "ws": "disabled_rest_only",
+                "ws": engine.cex.depth_stream.health,
+                "kucoin_source": engine.cex.source,
                 "rest": {name: public.health.get(urlsplit(url).hostname, "unknown")
                          for name, url in (("hedera_rpc", RPC), ("hedera_mirror", MIRROR), ("kucoin", KUCOIN))},
                 "retries": previous.get("retries", 0) + public.retries,
@@ -279,16 +291,24 @@ class Runtime:
             tx._db.execute("INSERT OR REPLACE INTO runtime_health VALUES (1, ?)", (json.dumps(health),))
         public.retries = engine.dex.cache_hits = engine.cex.cache_hits = self.log.dropped = 0
 
+    def _recovery_allowed(self, tx, shutdown, *, expired=False):
+        row = self.latest(tx)
+        return (not shutdown.is_set() and row is not None and row["id"] == self.session_id
+                and row["state"] == ("expired" if expired else "running")
+                and not tx._db.execute("SELECT 1 FROM runtime_stop_latch").fetchone())
+
     async def _watch(self, worker_id, shutdown):
         while not shutdown.is_set() and self.tick(worker_id):
             await self.sleep(POLL_SECONDS)
 
     async def _cycles(self, engine, public, worker_id):
+        await engine.recover()
         while self.tick(worker_id):
             cycle = await engine.worker(worker_id).analyze()
             severity = Level.WARNING if cycle.dex_snapshot is None or cycle.cex_snapshot is None else Level.INFO
             self.log.emit(Event.ANALYSIS, severity, worker=worker_id, cycle=cycle.id)
             self._health(public, engine, cycle)
+            await engine.recover()
             await self.sleep(MIN_INTERVAL.total_seconds())
 
     async def run(self, worker_id, config, shutdown):
@@ -303,17 +323,25 @@ class Runtime:
             engine.gate = lambda tx, worker, now: (
                 Reason.WORKER_INACTIVE if shutdown.is_set() else self.gate(tx, worker, now)
             )
+            if not self.tick(worker_id):
+                await self._drain_expired(engine, public, shutdown)
+                return
+            engine.recovery_gate = lambda tx: self._recovery_allowed(tx, shutdown)
             self.log.emit(Event.WORKER_STATE, worker=worker_id)
+            engine.cex.on_source_change = lambda source, reason: self.log.emit(
+                Event.CONNECTION_STATUS, worker=worker_id, source=source, reason=reason,
+            )
+            stream = asyncio.create_task(engine.cex.depth_stream.run())
             watch = asyncio.create_task(self._watch(worker_id, shutdown))
             cycles = asyncio.create_task(self._cycles(engine, public, worker_id))
             try:
-                done, _ = await asyncio.wait((watch, cycles), return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait((watch, cycles, stream), return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     task.result()
             finally:
-                for task in (watch, cycles):
+                for task in (watch, cycles, stream):
                     task.cancel()
-                await asyncio.gather(watch, cycles, return_exceptions=True)
+                await asyncio.gather(watch, cycles, stream, return_exceptions=True)
                 if shutdown.is_set():
                     with self.storage.transaction() as tx:
                         row = self.latest(tx)
@@ -321,6 +349,15 @@ class Runtime:
                             self._transition(tx, row, "stopped", self.now())
                 self.log.emit(Event.WORKER_STATE, worker=worker_id)
                 self._health(public, engine)
+            await self._drain_expired(engine, public, shutdown)
+
+    async def _drain_expired(self, engine, public, shutdown):
+        with self.storage.transaction() as tx:
+            drain = self._recovery_allowed(tx, shutdown, expired=True)
+        if drain:
+            engine.recovery_gate = lambda tx: self._recovery_allowed(tx, shutdown, expired=True)
+            await engine.recover()
+            self._health(public, engine)
 
 
 async def foreground(runtime, worker_id, config):

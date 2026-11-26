@@ -98,6 +98,7 @@ def observations(db, sheets):
             "insufficient_credit_headroom", *Reason,
         } else None
         for item in cycle.evaluations:
+            gas = item.gas_rpc
             admitted = row["admitted_direction"] == item.direction
             sheets.write("Observations", reference(cycle.id), reference(cycle.worker_id), NETWORK, PAIR,
                          cycle.observed_at.isoformat(), item.direction, item.status, item.reason,
@@ -105,7 +106,11 @@ def observations(db, sheets):
                          (miss if item.status == "eligible_for_simulation" else None),
                          *provenance, item.indicative_profit_usdt, item.gas_cost_usdt,
                          item.net_profit_usdt, item.stressed_profit_usdt, item.gas_budget_tinybars,
-                         reference(item.gas_evidence_id))
+                         reference(item.gas_evidence_id), item.gas_estimation_error,
+                         gas.provider if gas else None, gas.block if gas else None,
+                         gas.estimated_at.isoformat() if gas else None,
+                         gas.estimated_gas if gas else None, gas.gas_price_weibars if gas else None,
+                         item.estimated_gas_hbar, item.estimated_gas_usdc, item.dex_net_quote_usdc)
             for requested in (item.requested_dex, item.requested_cex):
                 if requested:
                     sheets.write("Requested quotes", reference(cycle.id), item.direction, *quote(requested))
@@ -199,7 +204,7 @@ def metadata(db, sheets):
         sheets.write("Health", f"worker {reference(row['id'])}", row["state"])
     if health:
         health = json.loads(health["payload"])
-        for key in ("observed_at", "ws", "retries", "cache_hits", "queue_drops"):
+        for key in ("observed_at", "ws", "kucoin_source", "retries", "cache_hits", "queue_drops"):
             sheets.write("Health", key, health.get(key))
         for venue, status in health["rest"].items():
             sheets.write("Health", f"{venue} REST", status)
@@ -208,7 +213,8 @@ def metadata(db, sheets):
                 sheets.write("Health", f"{venue} {key} at health sample", snap.get(key) if snap else None)
         for event in health["recent_events"]:
             sheets.write("Operational events", event["at"], event["event"], event["level"],
-                         reference(event.get("worker")), reference(event.get("cycle")))
+                         reference(event.get("worker")), reference(event.get("cycle")),
+                         event.get("source"), event.get("reason"))
 
 
 def legacy(db, sheets):
@@ -238,7 +244,10 @@ def export(database: Path, destination: Path):
                          "reason", "admitted", "trade status", "simulation miss", "DEX snapshot",
                          "DEX source UTC", "DEX received UTC", "CEX snapshot", "CEX source UTC",
                          "CEX received UTC", "indicative USDT", "estimated gas USDT", "evaluated net USDT",
-                         "stressed USDT", "gas budget tinybars", "gas provenance"),
+                         "stressed USDT", "gas budget tinybars", "gas provenance", "gas estimation error",
+                         "gas RPC provider", "gas estimate block", "gas estimate UTC", "estimated gas units",
+                         "RPC gas price weibars", "estimated gas HBAR", "estimated gas USDC",
+                         "DEX net quote USDC"),
         "Requested quotes": ("cycle", "direction", *QUOTE),
         "Trades": ("trade", "direction", "status", "accepted UTC", "gas quote UTC", "route gas units",
                    "network gas weibars", "cap gas weibars", "modeled gas per attempt tinybars",
@@ -255,7 +264,7 @@ def export(database: Path, destination: Path):
         "Sessions": ("session", "worker", "state", "start UTC", "deadline UTC", "last wall time UTC", "ended UTC"),
         "Configuration": ("session", "applied UTC", "section", "setting", "value"),
         "Health": ("metric", "value"),
-        "Operational events": ("at UTC", "event", "severity", "worker", "cycle"),
+        "Operational events": ("at UTC", "event", "severity", "worker", "cycle", "source", "reason"),
         "Legacy opportunities": ("opportunity", "worker", "direction", "observed UTC", "indicative USDT",
                                  "status", *QUOTE),
         "Legacy executions": ("execution", "opportunity", "outcome", "observed UTC", *QUOTE),
@@ -263,7 +272,7 @@ def export(database: Path, destination: Path):
     for name, columns in headers.items():
         sheets.add(name, columns)
     for field, meaning in (
-        ("scope", "Public analysis only. Simulated fills are historical offline fixture results when present."),
+        ("scope", "Public market analysis with virtual fills. Gas estimates and modeled debits are simulation values."),
         ("identity", f"{NETWORK}; {PAIR}. Record references are pseudonyms."),
         ("parity", "Assumes 1 USDC equals 1 USDT. Stablecoin delta is not net PnL when gas or open inventory remains."),
         ("fees", "CEX fee is included in the fill and shown separately for audit. DEX pool fee is embedded in the quote."),

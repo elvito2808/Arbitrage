@@ -3,7 +3,8 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated
+from fractions import Fraction
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
@@ -223,6 +224,24 @@ class Reason(StrEnum):
     PROFIT_THRESHOLD = "profit_threshold"
 
 
+class HederaGasProvenance(Record):
+    provider: Identifier
+    chain_id: Literal[295]
+    block: PositiveUnits
+    block_hash: Annotated[str, Field(pattern=r"^0x[0-9a-f]{64}$")]
+    side: Side
+    sender: Annotated[str, Field(pattern=r"^0x[0-9a-f]{40}$")]
+    router: Annotated[str, Field(pattern=r"^0x[0-9a-f]{40}$")]
+    path: tuple[str, str]
+    calldata: Annotated[str, Field(pattern=r"^0x[0-9a-f]{520}$")]
+    value_weibars: Literal[0]
+    requested_deadline: Timestamp
+    price_observed_at: Timestamp
+    gas_price_weibars: PositiveUnits
+    estimated_gas: PositiveUnits
+    estimated_at: Timestamp
+
+
 class Evaluation(Record):
     direction: Direction
     status: EvaluationStatus
@@ -235,6 +254,11 @@ class Evaluation(Record):
     stressed_profit_usdt: Exact | None = None
     gas_evidence_id: Identifier | None = None
     gas_budget_tinybars: PositiveUnits | None = None
+    gas_rpc: HederaGasProvenance | None = None
+    gas_estimation_error: Identifier | None = None
+    dex_net_quote_usdc: Exact | None = None
+    estimated_gas_hbar: Exact | None = None
+    estimated_gas_usdc: Exact | None = None
 
     @model_validator(mode="after")
     def validate_status(self) -> "Evaluation":
@@ -250,10 +274,21 @@ class Evaluation(Record):
         return self
 
 
+class KuCoinBookObservation(Record):
+    symbol: Literal["HBAR-USDT"]
+    transport: Literal["websocket", "rest"]
+    bid_price: Fraction
+    bid_quantity: Fraction
+    ask_price: Fraction
+    ask_quantity: Fraction
+
+
 class SnapshotObservation(Record):
     id: Identifier
     source_at: Timestamp
     received_at: Timestamp
+    completed_at: Timestamp | None = None
+    kucoin_book: KuCoinBookObservation | None = None
 
 
 class AnalysisCycle(Record):

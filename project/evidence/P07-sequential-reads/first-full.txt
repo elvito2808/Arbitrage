@@ -1,0 +1,246 @@
+python -m pytest -q -p no:cacheprovider
+........................................................................ [ 27%]
+........................................................................ [ 55%]
+.........................................sss...................FF....... [ 83%]
+............................F.............                               [100%]
+=================================== FAILURES ===================================
+_ test_running_cycle_cancelled_and_transport_closed[emergency-worker_inactive] _
+
+operations = (<arbitrage.runtime.Runtime object at 0x7fc972eab3e0>, Config(schema_version=1, simulation=Simulation(mode='simulation...cimal('50000'), cex_usdt=Decimal('3000'))), [datetime.datetime(2026, 11, 26, 0, 0, tzinfo=datetime.timezone.utc), 0.0])
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fc972ea8b00>
+kucoin_offline = None, control = 'emergency'
+reason = <Reason.WORKER_INACTIVE: 'worker_inactive'>
+
+    @pytest.mark.parametrize("control,reason", [
+        ("emergency", Reason.WORKER_INACTIVE), ("deadline", Reason.SESSION_DEADLINE),
+    ])
+    def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, kucoin_offline, control, reason):
+        original, config, clock = operations
+
+        async def run():
+            observed = asyncio.Event()
+            cancelled = asyncio.Event()
+            transports = []
+
+            async def hold(adapter):
+                transports.append(adapter.public.session)
+                observed.set()
+                try:
+                    await asyncio.Future()
+                finally:
+                    cancelled.set()
+
+            async def sleep(seconds):
+                try:
+                    await asyncio.sleep(0)
+                    if not observed.is_set():
+                        return
+                    if control == "deadline":
+                        clock[1] = 86_400
+                    else:
+                        original.control(control)
+                    await asyncio.sleep(0)
+                except asyncio.CancelledError:
+                    raise
+
+            monkeypatch.setattr("arbitrage.saucerswap.SaucerSwap.snapshot", hold)
+            monkeypatch.setattr("arbitrage.kucoin.KuCoin.snapshot", hold)
+            runtime = Runtime(original.directory, clock=original.clock, timer=original.timer, sleep=sleep)
+            with runtime.owner():
+                activation = runtime.activate("start", "worker-1", config)
+                await asyncio.wait_for(runtime.run(*activation, asyncio.Event()), timeout=2)
+            assert cancelled.is_set()
+            assert len(transports) == 2 and transports[0] is transports[1] and transports[0].closed
+            with runtime.storage.transaction() as tx:
+                rows = tx._db.execute("SELECT payload FROM analysis_cycles").fetchall()
+                assert len(rows) == 1 and reason.value in rows[0]["payload"]
+            after = Runtime(runtime.directory, clock=runtime.clock, timer=runtime.timer)
+            assert after.activate("recover", None) is None
+
+>       asyncio.run(run())
+
+tests/test_operations.py:205:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    async def run():
+        observed = asyncio.Event()
+        cancelled = asyncio.Event()
+        transports = []
+
+        async def hold(adapter):
+            transports.append(adapter.public.session)
+            observed.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+
+        async def sleep(seconds):
+            try:
+                await asyncio.sleep(0)
+                if not observed.is_set():
+                    return
+                if control == "deadline":
+                    clock[1] = 86_400
+                else:
+                    original.control(control)
+                await asyncio.sleep(0)
+            except asyncio.CancelledError:
+                raise
+
+        monkeypatch.setattr("arbitrage.saucerswap.SaucerSwap.snapshot", hold)
+        monkeypatch.setattr("arbitrage.kucoin.KuCoin.snapshot", hold)
+        runtime = Runtime(original.directory, clock=original.clock, timer=original.timer, sleep=sleep)
+        with runtime.owner():
+            activation = runtime.activate("start", "worker-1", config)
+            await asyncio.wait_for(runtime.run(*activation, asyncio.Event()), timeout=2)
+        assert cancelled.is_set()
+>       assert len(transports) == 2 and transports[0] is transports[1] and transports[0].closed
+E       assert (1 == 2)
+E        +  where 1 = len([<aiohttp.client.ClientSession object at 0x7fc972a145c0>])
+
+tests/test_operations.py:198: AssertionError
+_ test_running_cycle_cancelled_and_transport_closed[deadline-session_deadline] _
+
+operations = (<arbitrage.runtime.Runtime object at 0x7fc972ed4770>, Config(schema_version=1, simulation=Simulation(mode='simulation...mal('50000'), cex_usdt=Decimal('3000'))), [datetime.datetime(2026, 11, 26, 0, 0, tzinfo=datetime.timezone.utc), 86400])
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fc972c181a0>
+kucoin_offline = None, control = 'deadline'
+reason = <Reason.SESSION_DEADLINE: 'session_deadline'>
+
+    @pytest.mark.parametrize("control,reason", [
+        ("emergency", Reason.WORKER_INACTIVE), ("deadline", Reason.SESSION_DEADLINE),
+    ])
+    def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, kucoin_offline, control, reason):
+        original, config, clock = operations
+
+        async def run():
+            observed = asyncio.Event()
+            cancelled = asyncio.Event()
+            transports = []
+
+            async def hold(adapter):
+                transports.append(adapter.public.session)
+                observed.set()
+                try:
+                    await asyncio.Future()
+                finally:
+                    cancelled.set()
+
+            async def sleep(seconds):
+                try:
+                    await asyncio.sleep(0)
+                    if not observed.is_set():
+                        return
+                    if control == "deadline":
+                        clock[1] = 86_400
+                    else:
+                        original.control(control)
+                    await asyncio.sleep(0)
+                except asyncio.CancelledError:
+                    raise
+
+            monkeypatch.setattr("arbitrage.saucerswap.SaucerSwap.snapshot", hold)
+            monkeypatch.setattr("arbitrage.kucoin.KuCoin.snapshot", hold)
+            runtime = Runtime(original.directory, clock=original.clock, timer=original.timer, sleep=sleep)
+            with runtime.owner():
+                activation = runtime.activate("start", "worker-1", config)
+                await asyncio.wait_for(runtime.run(*activation, asyncio.Event()), timeout=2)
+            assert cancelled.is_set()
+            assert len(transports) == 2 and transports[0] is transports[1] and transports[0].closed
+            with runtime.storage.transaction() as tx:
+                rows = tx._db.execute("SELECT payload FROM analysis_cycles").fetchall()
+                assert len(rows) == 1 and reason.value in rows[0]["payload"]
+            after = Runtime(runtime.directory, clock=runtime.clock, timer=runtime.timer)
+            assert after.activate("recover", None) is None
+
+>       asyncio.run(run())
+
+tests/test_operations.py:205:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    async def run():
+        observed = asyncio.Event()
+        cancelled = asyncio.Event()
+        transports = []
+
+        async def hold(adapter):
+            transports.append(adapter.public.session)
+            observed.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+
+        async def sleep(seconds):
+            try:
+                await asyncio.sleep(0)
+                if not observed.is_set():
+                    return
+                if control == "deadline":
+                    clock[1] = 86_400
+                else:
+                    original.control(control)
+                await asyncio.sleep(0)
+            except asyncio.CancelledError:
+                raise
+
+        monkeypatch.setattr("arbitrage.saucerswap.SaucerSwap.snapshot", hold)
+        monkeypatch.setattr("arbitrage.kucoin.KuCoin.snapshot", hold)
+        runtime = Runtime(original.directory, clock=original.clock, timer=original.timer, sleep=sleep)
+        with runtime.owner():
+            activation = runtime.activate("start", "worker-1", config)
+            await asyncio.wait_for(runtime.run(*activation, asyncio.Event()), timeout=2)
+        assert cancelled.is_set()
+>       assert len(transports) == 2 and transports[0] is transports[1] and transports[0].closed
+E       assert (1 == 2)
+E        +  where 1 = len([<aiohttp.client.ClientSession object at 0x7fc972c1aab0>])
+
+tests/test_operations.py:198: AssertionError
+__ test_unsafe_fixture_markets_never_reserve[cex_age-value1-cross_venue_skew] __
+
+offline = (<arbitrage.storage.Storage object at 0x7fc972de2ab0>, <test_simulation.OfflineMarket object at 0x7fc972de0080>, <function offline.<locals>.make at 0x7fc972ac9440>)
+setting = 'cex_age', value = datetime.timedelta(seconds=5)
+reason = <Reason.CROSS_VENUE_SKEW: 'cross_venue_skew'>
+
+    @pytest.mark.parametrize(("setting", "value", "reason"), [
+        ("dex_age", timedelta(seconds=11), Reason.STALE_OR_INVALID_CLOCK),
+        ("cex_age", timedelta(seconds=5), Reason.CROSS_VENUE_SKEW),
+        ("quantity", Fraction(999), Reason.INSUFFICIENT_DEPTH),
+        ("price_range", (10**12, 2 * 10**12 + 1), Reason.GAS_INVALID),
+        ("bid", Fraction("0.05305"), Reason.MAXIMUM_LOSS),
+    ])
+    def test_unsafe_fixture_markets_never_reserve(offline, setting, value, reason):
+        store, market, make = offline
+        setattr(market, setting, value)
+        before = state(store)
+>       assert admit(make()).evaluations[0].reason == reason
+E       AssertionError: assert None == <Reason.CROSS_VENUE_SKEW: 'cross_venue_skew'>
+E        +  where None = Evaluation(direction=<Direction.BUY_DEX: 'buy_dex'>, status=<EvaluationStatus.ELIGIBLE: 'eligible_for_simulation'>, re...00, gas_rpc=None, gas_estimation_error=None, dex_net_quote_usdc=None, estimated_gas_hbar=None, estimated_gas_usdc=None).reason
+
+tests/test_simulation.py:511: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_operations.py::test_running_cycle_cancelled_and_transport_closed[emergency-worker_inactive]
+FAILED tests/test_operations.py::test_running_cycle_cancelled_and_transport_closed[deadline-session_deadline]
+FAILED tests/test_simulation.py::test_unsafe_fixture_markets_never_reserve[cex_age-value1-cross_venue_skew]
+3 failed, 252 passed, 3 skipped in 7.94s
+exit=1

@@ -314,7 +314,7 @@ class Transaction:
         row = self._db.execute("SELECT payload FROM analysis_cycles WHERE id = ?", (cycle_id,)).fetchone()
         return AnalysisCycle.model_validate_json(row["payload"]) if row else None
 
-    def owns_snapshots(self, network: str, cycle_id: str, ids: tuple[str, str]) -> bool:
+    def owns_snapshots(self, network: str, cycle_id: str, ids: tuple[str, ...]) -> bool:
         rows = self._db.execute(
             """SELECT snapshot_id FROM analyzed_snapshots
                WHERE network = ? AND cycle_id = ?""", (network, cycle_id),

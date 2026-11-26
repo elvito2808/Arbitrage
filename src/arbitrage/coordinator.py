@@ -17,10 +17,12 @@ from .market_data import (
 )
 from .models import (
     MAX_UNITS, AnalysisCycle, Asset, Direction, Evaluation, EvaluationStatus,
-    Holding, MarketQuote, Reason, Side, SnapshotObservation, Venue, Worker, WorkerState,
+    Holding, KuCoinBookObservation, MarketQuote, Reason, Side, SnapshotObservation, Venue, Worker, WorkerState,
     normalize_time,
 )
-from .saucerswap import GAS_PROXY, GasEstimate, PoolSnapshot, RouteGasEvidence, SaucerSwap, amounts
+from .saucerswap import (
+    WEIBARS_PER_TINYBAR, GasEstimate, PoolSnapshot, RouteGasEvidence, SaucerSwap, amounts, gas_cost_tinybars,
+)
 from .storage import Storage, Transaction
 
 NETWORK = "hedera:295"
@@ -28,8 +30,7 @@ READ_DEADLINE = 10
 LEASE = timedelta(seconds=20)
 MIN_INTERVAL = timedelta(seconds=15)
 MICRO = 10**Asset.USDT.decimals
-WEIBARS = 10**18
-WEIBARS_PER_TINYBAR = 10**10
+
 
 
 def ceil(value: Fraction) -> int:
@@ -81,7 +82,10 @@ class OpportunityCoordinator:
     ) -> "OpportunityCoordinator":
         age = timedelta(seconds=settings.cache_ttl_seconds)
         return cls(
-            storage, settings, SaucerSwap(public, age),
+            storage, settings, SaucerSwap(
+                public, age, estimate_sender=settings.hedera_estimate_sender,
+                slippage=min(Fraction("0.005"), Fraction(settings.slippage_fraction)),
+            ),
             KuCoin(public, fee=settings.cex_fee_fraction, cache_age=age), clock=public.clock,
         )
 
@@ -109,7 +113,7 @@ class OpportunityCoordinator:
 
     @staticmethod
     def _observations(
-        pool: PoolSnapshot, book: Book,
+        pool: PoolSnapshot, book: Book, dex_completed: datetime,
     ) -> tuple[SnapshotObservation, SnapshotObservation]:
         if (
             type(pool.block) is not int or pool.block <= 0
@@ -121,9 +125,15 @@ class OpportunityCoordinator:
         try:
             return (
                 SnapshotObservation(id=f"{NETWORK}:{pool.block}:{pool.block_hash}",
-                                    source_at=pool.source_at, received_at=pool.received_at),
-                SnapshotObservation(id=f"kucoin:{SYMBOL}:{book.sequence}",
-                                    source_at=book.source_at, received_at=book.received_at),
+                                    source_at=pool.source_at, received_at=pool.received_at,
+                                    completed_at=dex_completed),
+                SnapshotObservation(id=book.snapshot_id,
+                                    source_at=book.source_at, received_at=book.received_at,
+                                    kucoin_book=KuCoinBookObservation(
+                                        symbol=SYMBOL, transport=book.source,
+                                        bid_price=book.bids[0].price, bid_quantity=book.bids[0].quantity,
+                                        ask_price=book.asks[0].price, ask_quantity=book.asks[0].quantity,
+                                    ) if book.bids and book.asks else None),
             )
         except ValueError:
             raise InvalidCycle(Reason.STALE_OR_INVALID_CLOCK) from None
@@ -160,11 +170,14 @@ class OpportunityCoordinator:
         gross = priced_units(book.asks, Side.BUY, Fraction(0))
         return Market(pool, book, dex, cex, quotes, gross)
 
-    async def _read(self) -> tuple[PoolSnapshot, Book]:
-        async with asyncio.timeout(READ_DEADLINE), asyncio.TaskGroup() as group:
-            pool = group.create_task(self.dex.snapshot())
-            book = group.create_task(self.cex.snapshot())
-        return pool.result(), book.result()
+    async def _read(self) -> tuple[PoolSnapshot, Book, datetime]:
+        # Owner-approved sequential sampling: DEX first, then KuCoin.
+        # Keep one bounded deadline for the complete two-venue read.
+        async with asyncio.timeout(READ_DEADLINE):
+            pool = await self.dex.snapshot()
+            dex_completed = self._now()
+            book = await self.cex.snapshot()
+        return pool, book, dex_completed
 
     @staticmethod
     def _failure(error: Exception) -> Reason:
@@ -186,7 +199,7 @@ class OpportunityCoordinator:
         self, gas: GasEstimate, side: Side, market: Market, now: datetime,
     ) -> tuple[int, int, str]:
         if gas.execution_gas is None:
-            raise InvalidCycle(Reason.GAS_UNKNOWN)
+            raise InvalidCycle(Reason.GAS_INVALID if gas.invalid else Reason.GAS_UNKNOWN)
         evidence = gas.route_evidence
         prices = gas.price_range_weibars
         if (
@@ -194,7 +207,6 @@ class OpportunityCoordinator:
             or evidence.side != side or gas.side != side
             or evidence.execution_gas != gas.execution_gas
             or type(gas.execution_gas) is not int or gas.execution_gas <= 0
-            or gas.execution_gas in (34_133, GAS_PROXY)
             or gas.observed_at is None or not isinstance(prices, tuple) or len(prices) != 2
             or any(type(price) is not int for price in prices)
             or not 0 < prices[0] <= prices[1] <= 2 * prices[0]
@@ -207,14 +219,27 @@ class OpportunityCoordinator:
             raise InvalidCycle(Reason.GAS_INVALID) from None
         if observed < market.pool.received_at:
             raise InvalidCycle(Reason.GAS_INVALID)
+        if evidence.rpc is not None:
+            if (
+                not isinstance(self.dex, SaucerSwap)
+                or not self.dex.verifies_route_gas(gas, market.pool)
+                or evidence.rpc.requested_deadline <= now
+            ):
+                raise InvalidCycle(Reason.GAS_INVALID)
+        elif gas.execution_gas in (34_133, 244_829):
+            # Reject legacy measurements passed as unverified fixture evidence.
+            raise InvalidCycle(Reason.GAS_INVALID)
         capped_price = min(prices[1], int(prices[0] * self.gas_cap))
-        wei = gas.execution_gas * capped_price
-        budget = ceil(Fraction(wei, WEIBARS_PER_TINYBAR))
+        budget = gas_cost_tinybars(gas.execution_gas, capped_price)
         if budget > MAX_UNITS:
             raise InvalidCycle(Reason.GAS_INVALID)
-        # Use the fee-free full-size CEX ask as a conservative HBAR valuation.
-        cost = ceil(Fraction(budget * WEIBARS_PER_TINYBAR * market.gross_cex_buy_units, WEIBARS * 1000))
-        return budget, cost, evidence.id
+        return budget, self._gas_cost_usdc(budget, market), evidence.id
+
+    @staticmethod
+    def _gas_cost_usdc(tinybars: int, market: Market) -> int:
+        # Fresh, fee-free ask for the full 1,000 HBAR, rounded up in USDC/USDT
+        # base units under the configured parity assumption.
+        return ceil(Fraction(tinybars * market.gross_cex_buy_units, TRADE_UNITS))
 
     @staticmethod
     def _available(tx: Transaction, requirements: dict[Holding, int]) -> bool:
@@ -246,9 +271,9 @@ class OpportunityCoordinator:
         try:
             if len(market.pool.gas) != 2 or not isinstance(market.pool.gas[dex_index], GasEstimate):
                 raise InvalidCycle(Reason.GAS_INVALID)
-            budget, cost, evidence_id = self._gas(
-                market.pool.gas[dex_index], dex.side, market, now,
-            )
+            gas = market.pool.gas[dex_index]
+            fields["gas_estimation_error"] = gas.estimation_error
+            budget, cost, evidence_id = self._gas(gas, dex.side, market, now)
         except InvalidCycle as error:
             if not self._available(tx, requirements):
                 return Evaluation(**fields, status=EvaluationStatus.REJECTED,
@@ -263,6 +288,16 @@ class OpportunityCoordinator:
             stressed_profit_usdt=usdt(stressed), gas_evidence_id=evidence_id,
             gas_budget_tinybars=budget,
         )
+        rpc = gas.route_evidence.rpc
+        if rpc is not None:
+            estimate_tinybars = gas_cost_tinybars(rpc.estimated_gas, rpc.gas_price_weibars)
+            estimate_usdc = self._gas_cost_usdc(estimate_tinybars, market)
+            fields.update(
+                gas_rpc=rpc,
+                estimated_gas_hbar=Decimal(f"{estimate_tinybars}e-8"),
+                estimated_gas_usdc=usdt(estimate_usdc),
+                dex_net_quote_usdc=usdt(dex.quote_units + estimate_usdc if buy_dex else dex.quote_units - estimate_usdc),
+            )
         requirements[Holding.DEX_HBAR] = budget
         reason = None
         if not self._available(tx, requirements):
@@ -312,7 +347,7 @@ class OpportunityCoordinator:
             except InvalidCycle as error:
                 reason = error.reason
         if reason is None:
-            ids = (market.dex_snapshot.id, market.cex_snapshot.id)
+            ids = self._snapshot_ids(market)
             if any(tx.seen_snapshot(NETWORK, key) for key in ids):
                 reason = Reason.DUPLICATE_SNAPSHOT
         if reason is not None:
@@ -328,6 +363,10 @@ class OpportunityCoordinator:
             self._after_analysis(tx, result, market, now)
         tx.release_analysis(NETWORK, cycle_id, now)
         return result
+
+    @staticmethod
+    def _snapshot_ids(market: Market) -> tuple[str, str, str]:
+        return market.dex_snapshot.id, market.cex_snapshot.id, market.book.timestamp_id
 
     def _after_analysis(
         self, tx: Transaction, cycle: AnalysisCycle, market: Market, now: datetime,
@@ -350,8 +389,8 @@ class OpportunityCoordinator:
             market, reason = None, None
             observations = (None, None)
             try:
-                pool, book = await self._read()
-                observations = self._observations(pool, book)
+                pool, book, dex_completed = await self._read()
+                observations = self._observations(pool, book, dex_completed)
                 market = self._market(pool, book, observations, self._now())
             except (InvalidCycle, MarketDataError, TimeoutError, ExceptionGroup) as error:
                 reason = self._failure(error)

@@ -1,18 +1,67 @@
 """Read-only SaucerSwap V1 reserve and router pricing."""
 
 import asyncio
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from fractions import Fraction
+from hashlib import sha256
+from math import ceil
+from urllib.parse import urlsplit
 
-from .market_data import MAX_AGE, TRADE_UNITS, MarketDataError, PublicConnections, Unavailable, require_fresh
-from .models import Asset, Identifier, MarketQuote, PositiveUnits, Record, Side, Venue
+from .market_data import (
+    MAX_AGE, RPC, TRADE_UNITS, MarketDataError, PublicConnections, Unavailable, require_fresh,
+)
+from .models import Asset, HederaGasProvenance, Identifier, MarketQuote, PositiveUnits, Record, Side, Venue
 
 PAIR = "0xdb34c1ef944883f0e5a2fc18b6c1978b088bd31d"
 USDC = "0x000000000000000000000000000000000006f89a"
 WHBAR = "0x0000000000000000000000000000000000163b5a"
 FACTORY = "0x0000000000000000000000000000000000103780"
 ROUTER = "0x00000000000000000000000000000000002e7a5d"
-GAS_PROXY = 244_829
+CHAIN_ID = 295
+WEIBARS_PER_TINYBAR = 10**10
+MAX_TRANSACTION_GAS = 15_000_000
+MIN_CONTRACT_GAS = 21_000
+FEE_PROVIDER = urlsplit(RPC).netloc
+EXACT_OUTPUT_SELECTOR = "8803dbee"
+EXACT_INPUT_SELECTOR = "38ed1739"
+
+
+@dataclass(frozen=True)
+class HistoricalGasCalibration:
+    transaction_id: str = "0.0.1268672@1795674832.261067947"
+    router: str = ROUTER
+    selector: str = "7ff36ab5"
+    path: tuple[str, str] = (WHBAR, USDC)
+    input_whbar_units: int = 100_000_000_000
+    output_usdc_units: int = 53_048_295
+    gas_limit: int = 1_120_000
+    gas_used: int = 143_161
+    gas_price_weibars: int = 1_590_000_000_000
+    charged_gas_tinybars: int = 22_762_599
+
+    @property
+    def calculated_gas_tinybars(self) -> int:
+        return gas_cost_tinybars(self.gas_used, self.gas_price_weibars)
+
+
+HISTORICAL_GAS = HistoricalGasCalibration()
+
+
+def gas_cost_tinybars(gas: int, price_weibars: int) -> int:
+    return ceil(Fraction(gas * price_weibars, WEIBARS_PER_TINYBAR))
+
+
+def quantity(result: object, lower: int, upper: int) -> int:
+    if (
+        not isinstance(result, str) or len(result) > len(hex(upper))
+        or not re.fullmatch(r"0x(?:0|[1-9a-f][0-9a-f]*)", result)
+    ):
+        raise MarketDataError("invalid Hedera JSON-RPC quantity")
+    if not lower <= (value := int(result, 16)) <= upper:
+        raise MarketDataError("Hedera JSON-RPC quantity outside supported range")
+    return value
 
 
 def word(value: int) -> str:
@@ -49,6 +98,7 @@ class RouteGasEvidence(Record):
     snapshot_id: Identifier
     side: Side
     execution_gas: PositiveUnits
+    rpc: HederaGasProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -57,19 +107,13 @@ class GasEstimate:
     observed_at: datetime | None
     price_range_weibars: tuple[int, int] | None
     execution_gas: int | None = None
-    historical_proxy_gas: int = GAS_PROXY
-    provenance: str = "P01 single historical swap, route and direction coverage unknown"
     route_evidence: RouteGasEvidence | None = None
+    estimation_error: str | None = None
+    invalid: bool = False
 
     @property
     def cost_valid(self) -> bool:
         return self.execution_gas is not None and self.price_range_weibars is not None
-
-    @property
-    def capped_proxy_weibars(self) -> int | None:
-        if self.price_range_weibars is not None:
-            return self.historical_proxy_gas * self.price_range_weibars[1]
-        return None
 
 
 @dataclass(frozen=True)
@@ -87,12 +131,21 @@ class PoolSnapshot:
 
 
 class SaucerSwap:
-    def __init__(self, public: PublicConnections, cache_age: timedelta = MAX_AGE):
+    def __init__(
+        self, public: PublicConnections, cache_age: timedelta = MAX_AGE, *,
+        estimate_sender: str | None = None, slippage: Fraction = Fraction("0.005"),
+    ):
         if not timedelta(0) < cache_age <= MAX_AGE:
             raise ValueError("cache age must be positive and at most 10 seconds")
         self.public = public
         self.cache_hits = 0
         self.cache_age = cache_age
+        if estimate_sender is not None and (
+            not re.fullmatch(r"0x[0-9a-f]{40}", estimate_sender) or int(estimate_sender, 16) == 0
+        ):
+            raise ValueError("expected a nonzero public lowercase EVM address")
+        self.estimate_sender = estimate_sender
+        self.slippage = slippage
         self._cached: PoolSnapshot | None = None
         self._lock = asyncio.Lock()
 
@@ -100,17 +153,114 @@ class SaucerSwap:
         result = await self.public.rpc("eth_call", {"to": address, "data": "0x" + data}, block)
         return words(result, length)
 
-    async def _gas(self) -> tuple[GasEstimate, GasEstimate]:
+    def _estimate_call(
+        self, side: Side, sender: str, buy: int, sell: int, deadline: datetime,
+    ) -> tuple[dict[str, str], tuple[str, str]]:
+        if side == Side.BUY:
+            selector, path = EXACT_OUTPUT_SELECTOR, (USDC, WHBAR)
+            amount, boundary = TRADE_UNITS, ceil(buy * (1 + self.slippage))
+        else:
+            selector, path = EXACT_INPUT_SELECTOR, (WHBAR, USDC)
+            amount, boundary = TRADE_UNITS, int(sell * (1 - self.slippage))
+        if boundary <= 0:
+            raise MarketDataError("invalid SaucerSwap gas-estimate amount bound")
+        data = selector + "".join(map(word, (
+            amount, boundary, 160, int(sender, 16), int(deadline.timestamp()),
+            2, int(path[0], 16), int(path[1], 16),
+        )))
+        return {"from": sender, "to": ROUTER, "data": "0x" + data, "value": "0x0"}, path
+
+    async def _gas_price(self) -> tuple[datetime | None, int | None, str | None]:
         try:
-            price = int(await self.public.rpc("eth_gasPrice"), 16)
-            if price <= 0:
-                raise ValueError
-        except (MarketDataError, ValueError, TypeError):
-            return GasEstimate(Side.BUY, None, None), GasEstimate(Side.SELL, None, None)
-        observed = self.public.clock()
+            async with asyncio.timeout(2):
+                raw = await self.public.rpc("eth_gasPrice")
+            price = quantity(raw, WEIBARS_PER_TINYBAR, 10**18)
+        except (Unavailable, TimeoutError):
+            return None, None, "gas_price_unavailable"
+        except MarketDataError:
+            return None, None, "gas_price_invalid"
+        return self.public.clock(), price, None
+
+    async def _estimate(
+        self, side: Side, sender: str, snapshot_id: str, block: int, block_hash: str,
+        deadline: datetime, buy: int, sell: int, price_observed: datetime, price: int,
+    ) -> GasEstimate:
+        prices = (price, price * 2)
+        try:
+            call, path = self._estimate_call(side, sender, buy, sell, deadline)
+            async with asyncio.timeout(2):
+                raw = await self.public.rpc("eth_estimateGas", call, "latest")
+        except (MarketDataError, TimeoutError):
+            return GasEstimate(side, price_observed, prices, estimation_error="route_estimate_unavailable")
+        try:
+            estimate = quantity(raw, MIN_CONTRACT_GAS, MAX_TRANSACTION_GAS)
+            observed = self.public.clock()
+            require_fresh(price_observed, price_observed, observed, self.cache_age)
+            if observed >= deadline:
+                raise MarketDataError("route deadline elapsed")
+            provenance = HederaGasProvenance(
+                provider=FEE_PROVIDER, chain_id=CHAIN_ID, block=block, block_hash=block_hash,
+                side=side, sender=sender, router=ROUTER, path=path, calldata=call["data"],
+                value_weibars=0, requested_deadline=deadline, price_observed_at=price_observed,
+                gas_price_weibars=price, estimated_gas=estimate, estimated_at=observed,
+            )
+        except ValueError:
+            return GasEstimate(side, price_observed, prices, estimation_error="route_estimate_invalid", invalid=True)
+        evidence = RouteGasEvidence(
+            id="hedera-gas:" + sha256(provenance.model_dump_json().encode()).hexdigest(),
+            snapshot_id=snapshot_id, side=side, execution_gas=estimate, rpc=provenance,
+        )
+        return GasEstimate(side, observed, prices, estimate, evidence)
+
+    async def _route_gas(
+        self, block: int, block_hash: str, source: datetime, buy: int, sell: int,
+        router_verified: bool, sampled: tuple[datetime | None, int | None, str | None],
+    ) -> tuple[GasEstimate, GasEstimate]:
+        observed, price, price_error = sampled
+        prices = (price, price * 2) if price is not None else None
+        deadline = (source + self.cache_age).replace(microsecond=0)
+        sender = self.estimate_sender
+        error = price_error
+        if error is None and sender is None:
+            error = "estimate_sender_unconfigured"
+        if error is None and (not router_verified or self.public.clock() >= deadline):
+            error = "route_context_unverified"
+        if error is not None:
+            return tuple(GasEstimate(
+                side, observed, prices, estimation_error=error,
+                invalid=error in {"gas_price_invalid", "route_context_unverified"},
+            ) for side in (Side.BUY, Side.SELL))
+        assert sender is not None and observed is not None and price is not None
+        snapshot_id = f"hedera:{CHAIN_ID}:{block}:{block_hash}"
+        estimates = await asyncio.gather(*(
+            self._estimate(side, sender, snapshot_id, block, block_hash, deadline, buy, sell, observed, price)
+            for side in (Side.BUY, Side.SELL)
+        ))
+        if any(gas.cost_valid for gas in estimates):
+            try:
+                # Hashio's relay estimates latest state even if a historical block
+                # is requested. Reject across a head change rather than claiming
+                # a historical estimate from the ignored block parameter.
+                async with asyncio.timeout(2):
+                    head = await self.public.rpc("eth_getBlockByNumber", "latest", False)
+                stable = isinstance(head, dict) and (head.get("number"), head.get("hash")) == (hex(block), block_hash)
+            except (MarketDataError, TimeoutError):
+                stable = False
+            if not stable:
+                return tuple(
+                    GasEstimate(
+                        gas.side, observed, prices, estimation_error="route_estimate_head_changed", invalid=True,
+                    ) if gas.cost_valid else gas for gas in estimates
+                )
+        return tuple(estimates)
+
+    def verifies_route_gas(self, gas: GasEstimate, pool: PoolSnapshot) -> bool:
         return (
-            GasEstimate(Side.BUY, observed, (price, price * 2)),
-            GasEstimate(Side.SELL, observed, (price, price * 2)),
+            pool is self._cached
+            and len(pool.gas) == 2
+            and gas is pool.gas[0 if gas.side == Side.BUY else 1]
+            and gas.route_evidence is not None
+            and gas.route_evidence.rpc is not None
         )
 
     async def _router(self, block: str, buy: int, sell: int) -> bool:
@@ -138,7 +288,7 @@ class SaucerSwap:
         return all(results)
 
     async def _read(self) -> PoolSnapshot:
-        if await self.public.rpc("eth_chainId") != "0x127":
+        if await self.public.rpc("eth_chainId") != hex(CHAIN_ID):
             raise MarketDataError("expected Hedera chain ID 295")
         block = await self.public.rpc("eth_getBlockByNumber", "latest", False)
         header_received = self.public.clock()
@@ -146,6 +296,8 @@ class SaucerSwap:
             number = int(block["number"], 16)
             block_hash = block["hash"]
             block_timestamp = int(block["timestamp"], 16)
+            if not isinstance(block_hash, str) or not re.fullmatch(r"0x[0-9a-f]{64}", block_hash):
+                raise ValueError("invalid block hash")
         except (KeyError, TypeError, ValueError):
             raise MarketDataError("invalid Hedera RPC block") from None
         tag = hex(number)
@@ -173,7 +325,6 @@ class SaucerSwap:
             )
             if (
                 mirror_data["number"] != number
-                or len(block_hash) != 66
                 or mirror_data["hash"][:66] != block_hash
                 or abs(block_timestamp - int(seconds)) > 2
             ):
@@ -189,7 +340,8 @@ class SaucerSwap:
         buy, sell = amounts(usdc, whbar)
         async with asyncio.TaskGroup() as group:
             router = group.create_task(self._router(tag, buy, sell))
-            gas = group.create_task(self._gas())
+            gas_price = group.create_task(self._gas_price())
+        gas = await self._route_gas(number, block_hash, source, buy, sell, router.result(), gas_price.result())
         completed = self.public.clock()
         require_fresh(source, received, completed, self.cache_age)
         snapshot_id = f"hedera:295:{number}:{block_hash}"
@@ -200,7 +352,7 @@ class SaucerSwap:
                 base_units=TRADE_UNITS, quote_units=total, snapshot_id=snapshot_id,
                 observed_at=received, source_at=source,
             ) for side, total in ((Side.BUY, buy), (Side.SELL, sell))),
-            gas.result(),
+            gas,
         )
 
     async def snapshot(self) -> PoolSnapshot:

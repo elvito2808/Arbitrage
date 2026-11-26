@@ -1,0 +1,15 @@
+Python 3.12.14
+python -m pip check
+No broken requirements found.
+python -m pytest -q -p no:cacheprovider tests/test_kucoin_depth_stream.py tests/test_coordinator.py
+...........................................................              [100%]
+59 passed in 0.81s
+python -m pytest -q -rs -p no:cacheprovider
+........................................................................ [ 27%]
+........................................................................ [ 55%]
+..........................................sss........................... [ 82%]
+.............................................                            [100%]
+=========================== short test summary info ============================
+SKIPPED [3] tests/test_market_smoke.py:19: public network smoke is opt-in
+258 passed, 3 skipped in 7.29s
+exit=0

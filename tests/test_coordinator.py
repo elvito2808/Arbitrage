@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from arbitrage.config import load_config
-from arbitrage.coordinator import LEASE, MIN_INTERVAL, NETWORK, OpportunityCoordinator
+from arbitrage.coordinator import LEASE, MIN_INTERVAL, NETWORK, InvalidCycle, OpportunityCoordinator
 from arbitrage.kucoin import Book, KuCoin, Level
-from arbitrage.market_data import TRADE_UNITS, Unavailable
+from arbitrage.market_data import TRADE_UNITS, MarketDataError, Unavailable
 from arbitrage.models import (
     Asset, Direction, EvaluationStatus, Holding, MarketQuote, Reason, Reservation, Side, Venue,
 )
@@ -183,8 +183,6 @@ def test_slippage_stress_and_loss_boundary(setup):
     ("dex_age", timedelta(seconds=11), Reason.STALE_OR_INVALID_CLOCK),
     ("dex_receipt_age", timedelta(seconds=-1), Reason.STALE_OR_INVALID_CLOCK),
     ("dex_age", timedelta(seconds=-3), Reason.STALE_OR_INVALID_CLOCK),
-    ("cex_age", timedelta(seconds=4), Reason.CROSS_VENUE_SKEW),
-    ("cex_receipt_age", timedelta(seconds=3), Reason.CROSS_VENUE_SKEW),
     ("reverse", True, Reason.PROVENANCE_MISMATCH),
     ("bad_quote", True, Reason.PROVENANCE_MISMATCH),
     ("bad_size", True, Reason.PROVENANCE_MISMATCH),
@@ -381,3 +379,102 @@ def test_market_deadline_records_miss(setup, monkeypatch):
     monkeypatch.setattr("arbitrage.coordinator.READ_DEADLINE", 0.01)
     monkeypatch.setattr(market, "snapshot", held)
     assert run(coordinator).evaluations[0].reason == Reason.MARKET_UNAVAILABLE
+
+
+def test_market_reads_are_sequential_dex_before_kucoin(setup, monkeypatch):
+    _, market, coordinator = setup
+    order = []
+    dex_snapshot = market.snapshot
+    cex_snapshot = market.cex.snapshot
+
+    async def read_dex():
+        order.append("dex:start")
+        await asyncio.sleep(0)
+        result = await dex_snapshot()
+        order.append("dex:done")
+        return result
+
+    async def read_kucoin():
+        order.append("kucoin:start")
+        result = await cex_snapshot()
+        order.append("kucoin:done")
+        return result
+
+    monkeypatch.setattr(coordinator.dex, "snapshot", read_dex)
+    monkeypatch.setattr(coordinator.cex, "snapshot", read_kucoin)
+    asyncio.run(coordinator._read())
+    assert order == ["dex:start", "dex:done", "kucoin:start", "kucoin:done"]
+
+@pytest.mark.parametrize("field", ["source_at", "received_at"])
+@pytest.mark.parametrize("seconds", [0, 2, 5, 9, 10, 10.000001])
+def test_cross_venue_timestamp_boundaries(setup, field, seconds):
+    _, market, coordinator = setup
+    pool, book, _ = asyncio.run(coordinator._read())
+    # A fresh receipt cannot differ by more than ten seconds. For source
+    # timestamps an otherwise valid source-ahead value can cross the boundary.
+    later = market.now + timedelta(microseconds=1) if field == "source_at" and seconds > 10 else market.now
+    earlier = later - timedelta(seconds=seconds)
+    pool = replace(pool, source_at=market.now - timedelta(seconds=min(seconds, 10)),
+                   received_at=market.now - timedelta(seconds=min(seconds, 10)))
+    book = replace(book, source_at=market.now, received_at=market.now)
+    pool = replace(pool, **{field: earlier})
+    book = replace(book, **{field: later})
+    if seconds <= 10:
+        coordinator._timing(pool, book, market.now)
+    else:
+        with pytest.raises(InvalidCycle) as caught:
+            coordinator._timing(pool, book, market.now)
+        expected = Reason.CROSS_VENUE_SKEW if field == "source_at" else Reason.STALE_OR_INVALID_CLOCK
+        assert caught.value.reason == expected
+
+
+@pytest.mark.parametrize("error", [TimeoutError(), Unavailable("HTTP failure"),
+                                    MarketDataError("invalid DEX response")])
+def test_failed_dex_read_never_starts_kucoin(setup, monkeypatch, error):
+    _, _, coordinator = setup
+
+    async def fail():
+        raise error
+
+    async def unexpected():
+        pytest.fail("KuCoin started after a failed DEX read")
+
+    monkeypatch.setattr(coordinator.dex, "snapshot", fail)
+    monkeypatch.setattr(coordinator.cex, "snapshot", unexpected)
+    expected = Reason.INVALID_MARKET if type(error) is MarketDataError else Reason.MARKET_UNAVAILABLE
+    assert all(item.reason == expected for item in run(coordinator).evaluations)
+
+
+def test_sequential_market_reads_share_one_deadline(setup, monkeypatch):
+    _, market, coordinator = setup
+    pool = asyncio.run(market.snapshot())
+    deadlines = []
+    media = asyncio.timeout
+
+    def observe_timeout(delay):
+        context = media(delay)
+        deadlines.append(context)
+        return context
+
+    async def dex():
+        await asyncio.sleep(0)
+        return pool
+
+    cleaned_up = False
+
+    async def kucoin():
+        nonlocal cleaned_up
+        assert len(deadlines) == 1
+        deadlines[0].reschedule(asyncio.get_running_loop().time())
+        try:
+            await asyncio.Future()
+        finally:
+            cleaned_up = True
+
+    monkeypatch.setattr("arbitrage.coordinator.asyncio.timeout", observe_timeout)
+    monkeypatch.setattr(coordinator.dex, "snapshot", dex)
+    monkeypatch.setattr(coordinator.cex, "snapshot", kucoin)
+    with pytest.raises(TimeoutError):
+        asyncio.run(coordinator._read())
+    assert len(deadlines) == 1
+    assert cleaned_up

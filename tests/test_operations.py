@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 from arbitrage import cli, reporting
 from arbitrage.config import load_config
 from arbitrage.coordinator import LEASE, MIN_INTERVAL, NETWORK
-from arbitrage.market_data import PublicConnections
+from arbitrage.market_data import PublicConnections, Unavailable
 from arbitrage.models import Holding, Reason, Reservation
 from arbitrage.operational_log import Event, OperationalLog
 from arbitrage.runtime import Runtime
@@ -148,10 +148,21 @@ def test_clock_rollback_and_monotonic_deadline(operations):
     assert restarted.status()["session"]["state"] == "expired"
 
 
+@pytest.fixture
+def kucoin_offline(monkeypatch):
+    async def unavailable(_public, _resource):
+        raise Unavailable("fixture WebSocket unavailable")
+
+    monkeypatch.setattr(PublicConnections, "kucoin", unavailable)
+
+
 @pytest.mark.parametrize("control,reason", [
     ("emergency", Reason.WORKER_INACTIVE), ("deadline", Reason.SESSION_DEADLINE),
 ])
-def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, control, reason):
+@pytest.mark.parametrize("blocked_venue", ["dex", "kucoin"])
+def test_running_cycle_cancelled_and_transport_closed(
+    operations, monkeypatch, kucoin_offline, control, reason, blocked_venue,
+):
     original, config, clock = operations
 
     async def run():
@@ -159,8 +170,10 @@ def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, c
         cancelled = asyncio.Event()
         transports = []
 
-        async def hold(adapter):
+        async def hold(adapter, venue):
             transports.append(adapter.public.session)
+            if venue != blocked_venue:
+                return object()
             observed.set()
             try:
                 await asyncio.Future()
@@ -180,14 +193,21 @@ def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, c
             except asyncio.CancelledError:
                 raise
 
-        monkeypatch.setattr("arbitrage.saucerswap.SaucerSwap.snapshot", hold)
-        monkeypatch.setattr("arbitrage.kucoin.KuCoin.snapshot", hold)
+        async def dex(adapter):
+            return await hold(adapter, "dex")
+
+        async def kucoin(adapter):
+            return await hold(adapter, "kucoin")
+
+        monkeypatch.setattr("arbitrage.saucerswap.SaucerSwap.snapshot", dex)
+        monkeypatch.setattr("arbitrage.kucoin.KuCoin.snapshot", kucoin)
         runtime = Runtime(original.directory, clock=original.clock, timer=original.timer, sleep=sleep)
         with runtime.owner():
             activation = runtime.activate("start", "worker-1", config)
             await asyncio.wait_for(runtime.run(*activation, asyncio.Event()), timeout=2)
         assert cancelled.is_set()
-        assert len(transports) == 2 and transports[0] is transports[1] and transports[0].closed
+        assert len(transports) == (1 if blocked_venue == "dex" else 2)
+        assert all(session is transports[0] and session.closed for session in transports)
         with runtime.storage.transaction() as tx:
             rows = tx._db.execute("SELECT payload FROM analysis_cycles").fetchall()
             assert len(rows) == 1 and reason.value in rows[0]["payload"]
@@ -197,7 +217,7 @@ def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, c
     asyncio.run(run())
 
 
-def test_deadline_cancels_cycle_interval_sleep(operations, monkeypatch):
+def test_deadline_cancels_cycle_interval_sleep(operations, monkeypatch, kucoin_offline):
     original, config, clock = operations
 
     async def run():
@@ -216,7 +236,6 @@ def test_deadline_cancels_cycle_interval_sleep(operations, monkeypatch):
                 clock[1] = 86_400
 
         async def unavailable(adapter):
-            from arbitrage.market_data import Unavailable
             raise Unavailable("synthetic")
 
         monkeypatch.setattr("arbitrage.saucerswap.SaucerSwap.snapshot", unavailable)
@@ -238,7 +257,12 @@ def test_actual_p03_adapters_and_production_engine_unknown_gas(operations, monke
     exchange.depth["time"] = int(POOL_TIME.timestamp() * 1000)
     monkeypatch.setattr(PublicConnections, "rpc", lambda self, *args: hedera.rpc(*args))
     monkeypatch.setattr(PublicConnections, "mirror_block", lambda self, *args: hedera.mirror_block(*args))
-    monkeypatch.setattr(PublicConnections, "kucoin", lambda self, *args: exchange.kucoin(*args))
+    async def kucoin(public, resource):
+        if resource == "bootstrap":
+            raise Unavailable("fixture WebSocket unavailable")
+        return await exchange.kucoin(resource)
+
+    monkeypatch.setattr(PublicConnections, "kucoin", kucoin)
     before = state(original.storage)
 
     async def run():
@@ -258,7 +282,9 @@ def test_actual_p03_adapters_and_production_engine_unknown_gas(operations, monke
         payload, = tx._db.execute("SELECT payload FROM analysis_cycles").fetchone()
         assert [row["reason"] for row in json.loads(payload)["evaluations"]] == ["gas_unknown"] * 2
     health = original.status()["health"]
-    assert health["ws"] == "disabled_rest_only"
+    assert health["ws"] == "idle"
+    assert health["kucoin_source"] == "rest"
+    assert any(event.get("source") == "rest" for event in health["recent_events"])
     assert health["snapshots"]["dex"]["source_at"].endswith("+00:00")
     assert any(event["event"] == "analysis" and event["worker"] == "worker-1"
                and len(event["cycle"]) == 32 for event in health["recent_events"])

@@ -18,7 +18,8 @@ from .models import Asset, TRADE_HBAR
 RPC = "https://mainnet.hashio.io/api"
 MIRROR = "https://mainnet-public.mirrornode.hedera.com/api/v1"
 KUCOIN = "https://api.kucoin.com"
-MAX_SKEW = timedelta(seconds=2)
+MAX_SKEW = timedelta(seconds=10)
+MAX_SOURCE_AHEAD = timedelta(seconds=2)
 MAX_AGE = timedelta(seconds=10)
 TRADE_UNITS = TRADE_HBAR * 10**Asset.HBAR.decimals
 
@@ -43,7 +44,7 @@ def require_fresh(
     source_at: datetime, received_at: datetime, now: datetime, age: timedelta = MAX_AGE
 ) -> None:
     if (
-        source_at - received_at > MAX_SKEW
+        source_at - received_at > MAX_SOURCE_AHEAD
         or received_at > now
         or now - received_at > age
         or now - source_at > age
@@ -154,6 +155,8 @@ class PublicConnections:
 
     @asynccontextmanager
     async def kucoin_socket(self, endpoint: str, token: str, connect_id: str):
+        if self.before_request:
+            self.before_request()
         async with asyncio.timeout(5):
             socket = await self.session.ws_connect(
                 endpoint, params={"token": token, "connectId": connect_id},
@@ -166,7 +169,7 @@ class PublicConnections:
                 await socket.close()
 
     async def rpc(self, method: str, *params: object) -> Any:
-        if method not in {"eth_chainId", "eth_getBlockByNumber", "eth_gasPrice", "eth_call"}:
+        if method not in {"eth_chainId", "eth_getBlockByNumber", "eth_gasPrice", "eth_estimateGas", "eth_call"}:
             raise MarketDataError("RPC method is outside the public read scope")
         request_id = next(self._ids)
         data = await self._json("POST", RPC, {

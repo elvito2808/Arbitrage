@@ -1,0 +1,15 @@
+{"utc": "2026-11-26T08:51:16.734160+00:00", "stage": "rpc_scalar", "method": "eth_chainId", "result": "0x127"}
+{"utc": "2026-11-26T08:51:16.754838+00:00", "stage": "rpc_scalar", "method": "eth_gasPrice", "result": "0x176db7a6400"}
+{"utc": "2026-11-26T08:51:16.764437+00:00", "stage": "mirror_fee", "tinybars_per_gas": 161}
+{"utc": "2026-11-26T08:51:16.828416+00:00", "stage": "rpc_head", "number": "0x620883a", "source_timestamp_hex": "0x6b07f2fe"}
+{"utc": "2026-11-26T08:51:17.326300+00:00", "stage": "rpc_head", "number": "0x620883a", "source_timestamp_hex": "0x6b07f2fe"}
+{"utc": "2026-11-26T08:51:17.326590+00:00", "stage": "estimate_request", "side": "buy", "route_selector": "0x8803dbee"}
+{"utc": "2026-11-26T08:51:17.326817+00:00", "stage": "estimate_request", "side": "sell", "route_selector": "0x38ed1739"}
+{"utc": "2026-11-26T08:51:17.548790+00:00", "stage": "estimate_response", "side": "sell", "gas_hex": "0x1df23", "error_code": null, "error_category": null}
+{"utc": "2026-11-26T08:51:17.563117+00:00", "stage": "estimate_response", "side": "buy", "gas_hex": "0x1df10", "error_code": null, "error_category": null}
+{"utc": "2026-11-26T08:51:17.873116+00:00", "stage": "rpc_head", "number": "0x620883a", "source_timestamp_hex": "0x6b07f2fe"}
+{"utc": "2026-11-26T08:51:17.873201+00:00", "stage": "bracket", "attempt": 1, "head": "0x620883a", "head_hash": "0x712597cf77b6331f828c1c65c0ecf56cd6bf7c9ddd52405ffda8233921251706", "after": "0x620883a", "after_hash": "0x712597cf77b6331f828c1c65c0ecf56cd6bf7c9ddd52405ffda8233921251706", "stable": true, "age_seconds": 7.873183, "duration_seconds": 1.044688, "gross_buy_micro_usdc": 53962359, "gross_sell_micro_usdc": 53610473}
+{"utc": "2026-11-26T08:51:17.873318+00:00", "stage": "valuation_book", "source": "rest", "source_at": "2026-11-26T08:51:17.716000+00:00", "received_at": "2026-11-26T08:51:17.795034+00:00", "gross_1000_hbar_ask_micro_usdt": 54080000, "dex_cex_source_skew_seconds": 7.716, "within_runtime_skew": false}
+{"utc": "2026-11-26T08:51:17.873697+00:00", "stage": "verified_raw_estimate", "side": "buy", "chain": 295, "gas": 122640, "price_weibars": 1610000000000, "tinybars": 19745040, "hbar": "0.19745040", "micro_usdc": 10679}
+{"utc": "2026-11-26T08:51:17.873741+00:00", "stage": "verified_raw_estimate", "side": "sell", "chain": 295, "gas": 122659, "price_weibars": 1610000000000, "tinybars": 19748099, "hbar": "0.19748099", "micro_usdc": 10680}
+{"utc": "2026-11-26T08:51:17.873781+00:00", "stage": "finish", "stable_pair_verified": true}
