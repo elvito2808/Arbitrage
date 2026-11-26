@@ -10,6 +10,7 @@ from typing import Annotated
 
 from pydantic import Field, ValidationError
 
+from .config import Simulation
 from .coordinator import (
     NETWORK, WEIBARS_PER_TINYBAR, InvalidCycle, Market, OpportunityCoordinator, ceil,
 )
@@ -21,7 +22,6 @@ from .models import (
 )
 from .saucerswap import GasEstimate, RouteGasEvidence
 from .storage import Storage, Transaction
-from .config import Simulation
 
 MAX_ATTEMPTS = 3
 PUBLIC_SIMULATION_SCOPE = "public-market-simulation-v1"
@@ -127,7 +127,6 @@ class SimulationEngine(OpportunityCoordinator):
     _verify_fixture: FixtureVerifier | None = None
     _scenario = Scenario()
     _sleep: Callable[[float], Awaitable[None]] = staticmethod(asyncio.sleep)
-
     _public_simulation = False
 
     @classmethod
@@ -344,9 +343,20 @@ class SimulationEngine(OpportunityCoordinator):
             request = Request.model_validate_json(row["request"])
             if self._journal_scope is None or request.fixture_scope != self._journal_scope:
                 return "manual_review", None
-            if self._public_simulation and request.gas.evidence is None:
-                return "manual_review", None
             now = self._now()
+            if self._public_simulation:
+                evidence = request.gas.evidence
+                dex = request.evaluation.requested_dex
+                if (evidence is None or dex is None or evidence.side != dex.side
+                        or evidence.snapshot_id != dex.snapshot_id
+                        or evidence.execution_gas != request.gas.route_gas
+                        or evidence.id != request.evaluation.gas_evidence_id):
+                    self._append(tx, trade_id, Event(
+                        id=f"sim:{trade_id}:review", at=now,
+                        remaining=self._remaining(tx, request), note="gas provenance mismatch",
+                    ))
+                    tx.finish_simulation(trade_id, "manual_review")
+                    return "manual_review", None
             try:
                 events = tuple(Event.model_validate_json(data) for data in tx.simulation_events(trade_id))
             except ValidationError:
