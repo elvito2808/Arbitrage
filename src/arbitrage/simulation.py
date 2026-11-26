@@ -14,15 +14,17 @@ from .coordinator import (
     NETWORK, WEIBARS_PER_TINYBAR, InvalidCycle, Market, OpportunityCoordinator, ceil,
 )
 from .kucoin import Level, depth_value
-from .market_data import TRADE_UNITS
+from .market_data import TRADE_UNITS, PublicConnections
 from .models import (
     MAX_UNITS, AnalysisCycle, Evaluation, EvaluationStatus, Holding, LedgerEntry,
     MarketQuote, PositiveUnits, Reason, Record, Reservation, Side, Timestamp, Units, Venue, WorkerState,
 )
-from .saucerswap import GasEstimate
-from .storage import Transaction
+from .saucerswap import GasEstimate, RouteGasEvidence
+from .storage import Storage, Transaction
+from .config import Simulation
 
 MAX_ATTEMPTS = 3
+PUBLIC_SIMULATION_SCOPE = "public-market-simulation-v1"
 FixtureVerifier = Callable[[GasEstimate, Side, Market, datetime], bool]
 
 
@@ -69,6 +71,7 @@ class GasBasis(Record):
     route_gas: PositiveUnits
     price_weibars: tuple[int, int]
     debit_tinybars: PositiveUnits
+    evidence: RouteGasEvidence | None = None
 
 
 class Request(Record):
@@ -125,14 +128,30 @@ class SimulationEngine(OpportunityCoordinator):
     _scenario = Scenario()
     _sleep: Callable[[float], Awaitable[None]] = staticmethod(asyncio.sleep)
 
+    _public_simulation = False
+
+    @classmethod
+    def from_public(
+        cls, storage: Storage, settings: Simulation, public: PublicConnections,
+    ) -> "SimulationEngine":
+        engine = super().from_public(storage, settings, public)
+        engine._public_simulation = True
+        return engine
+
+    @property
+    def _journal_scope(self) -> str | None:
+        return PUBLIC_SIMULATION_SCOPE if self._public_simulation else self._fixture_scope
+
     def _gas(
         self, gas: GasEstimate, side: Side, market: Market, now: datetime,
     ) -> tuple[int, int, str]:
         budget, cost, evidence_id = super()._gas(gas, side, market, now)
-        # P03 has no independent, approved route estimator. Only the explicitly
-        # injected offline verifier can establish provenance for its own fixture.
-        if (self._fixture_scope is None or self._verify_fixture is None
-                or not self._verify_fixture(gas, side, market, now)):
+        if self._public_simulation:
+            trusted = self.dex.verifies_route_gas(gas, market.pool)
+        else:
+            trusted = (self._fixture_scope is not None and self._verify_fixture is not None
+                       and self._verify_fixture(gas, side, market, now))
+        if not trusted:
             raise InvalidCycle(Reason.GAS_INVALID)
         return budget, cost, evidence_id
 
@@ -141,7 +160,8 @@ class SimulationEngine(OpportunityCoordinator):
     ) -> None:
         eligible = next((item for item in cycle.evaluations
                          if item.status == EvaluationStatus.ELIGIBLE), None)
-        if eligible is None or self._fixture_scope is None:
+        scope = self._journal_scope
+        if eligible is None or scope is None:
             return
         if tx.unresolved_simulation(NETWORK):
             tx.simulation_miss(cycle.id, "unresolved_network_execution")
@@ -192,7 +212,7 @@ class SimulationEngine(OpportunityCoordinator):
                         for holding, units in requirements.items())
         gas = market.pool.gas[0 if dex.side == Side.BUY else 1]
         request = Request(
-            evaluation=eligible, fixture_scope=self._fixture_scope, accepted_at=now,
+            evaluation=eligible, fixture_scope=scope, accepted_at=now,
             cex_depth=tuple((str(level.price), str(level.quantity))
                             for level in (market.book.asks if cex.side == Side.BUY else market.book.bids)),
             fee=str(self.fee), slippage=str(self.slippage),
@@ -202,6 +222,7 @@ class SimulationEngine(OpportunityCoordinator):
                 debit_tinybars=ceil(Fraction(
                     gas.execution_gas * gas.price_range_weibars[0], WEIBARS_PER_TINYBAR,
                 )),
+                evidence=gas.route_evidence if self._public_simulation else None,
             ),
             funding=funding, scenario=self._scenario,
         )
@@ -321,7 +342,9 @@ class SimulationEngine(OpportunityCoordinator):
             if row is None or row["id"] != trade_id or row["status"] == "manual_review":
                 return tx.simulation_status(trade_id), None
             request = Request.model_validate_json(row["request"])
-            if self._fixture_scope is None or request.fixture_scope != self._fixture_scope:
+            if self._journal_scope is None or request.fixture_scope != self._journal_scope:
+                return "manual_review", None
+            if self._public_simulation and request.gas.evidence is None:
                 return "manual_review", None
             now = self._now()
             try:
@@ -387,7 +410,7 @@ class SimulationEngine(OpportunityCoordinator):
             try:
                 status, due = self._advance(row["id"])
             except (ValueError, sqlite3.IntegrityError):
-                if self._fixture_scope is None:
+                if self._journal_scope is None:
                     return "manual_review"
                 return self._settlement_review(row["id"])
             if due is not None:
