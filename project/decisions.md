@@ -10,3 +10,7 @@ Approved roadmap: ARB-RM-001 revision 1.0.0, including DEC-001 through DEC-018, 
 Owner approval verbatim: «نقشه راه ARB-RM-001 نسخه 1.0.0 و تصمیمات فنی آن را تأیید می‌کنم. مجوز آغاز اجرای نقشه راه، ایجاد زیرساخت Repository B و آماده‌سازی مأموریت‌های Codex در محدوده SIMULATION ONLY صادر می‌شود. آغاز کن.»
 
 Scope: B initialization and roadmap execution, manually relayed Codex assignments, simulation only, zero additional cost. No live trading, private credentials, server deployment, sensitive repository operations or A changes authorized. Separate approvals remain required. Technical feasibility remains unverified; dependent implementation gated on P01.
+
+
+## Owner decision — 2026-11-26
+Owner explicitly requests proceeding without local execution or personal-system backup at this stage. Durable independent backup is deferred, not VERIFIED. This supersedes the P02 backup gate in prior records; retain recovery risk and temporary restore evidence. No change to A, no live trading, no deployment or added cost. P02 may proceed in Codex Cloud. Owner instruction: «من فعلا نیازی به نسخه پشتیبانی روی سیستم خودم ندارم. پروژه بدون اینکه لازم باشد نسخه ای را روی سیستم خودم اجرا کنم، جلو ببر.»
