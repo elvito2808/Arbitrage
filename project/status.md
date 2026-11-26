@@ -17,3 +17,7 @@
 **Current blocked / unverified:** Owner-controlled independent backup, actual 24h service continuity, representative swap gas both directions, cost/latency under sustained load, any real-market profitability. No LIVE, credentials, server deployment or additional costs authorized. No autonomous Codex dispatch; owner relays English bounded assignment.
 
 **Recovery:** project/checkpoints/CP-001.md original initialization, new CP-002 approval handoff, and project/backups.md. Do not conflate GitHub source repository with independent offline backup. No active trading or background task.
+
+
+## Owner decision — 2026-11-26
+Owner explicitly requests proceeding without local execution or personal-system backup at this stage. Durable independent backup is deferred, not VERIFIED. This supersedes the P02 backup gate in prior records; retain recovery risk and temporary restore evidence. No change to A, no live trading, no deployment or added cost. P02 may proceed in Codex Cloud. Owner instruction: «من فعلا نیازی به نسخه پشتیبانی روی سیستم خودم ندارم. پروژه بدون اینکه لازم باشد نسخه ای را روی سیستم خودم اجرا کنم، جلو ببر.»
