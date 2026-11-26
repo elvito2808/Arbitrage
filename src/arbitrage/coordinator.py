@@ -165,10 +165,12 @@ class OpportunityCoordinator:
         return Market(pool, book, dex, cex, quotes, gross)
 
     async def _read(self) -> tuple[PoolSnapshot, Book]:
-        async with asyncio.timeout(READ_DEADLINE), asyncio.TaskGroup() as group:
-            pool = group.create_task(self.dex.snapshot())
-            book = group.create_task(self.cex.snapshot())
-        return pool.result(), book.result()
+        # Owner-approved sequential sampling: DEX first, then KuCoin.
+        # Keep one bounded deadline for the complete two-venue read.
+        async with asyncio.timeout(READ_DEADLINE):
+            pool = await self.dex.snapshot()
+            book = await self.cex.snapshot()
+        return pool, book
 
     @staticmethod
     def _failure(error: Exception) -> Reason:
