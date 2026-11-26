@@ -196,6 +196,8 @@ class KuCoin:
                 async with asyncio.timeout(9):
                     if self._increments is None:
                         data = await self.public.kucoin("symbol")
+                        if not isinstance(data, dict):
+                            raise MarketDataError("invalid KuCoin symbol metadata")
                         if (data.get("symbol"), data.get("baseCurrency"), data.get("quoteCurrency")) != (
                             SYMBOL, BASE_CURRENCY, QUOTE_CURRENCY,
                         ):

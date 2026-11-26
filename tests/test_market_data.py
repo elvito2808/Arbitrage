@@ -408,3 +408,57 @@ def test_kucoin_validates_requested_identity_before_reading_depth(field, invalid
         assert (await cex.quote(Side.BUY, TRADE_UNITS)).quote_units == 53_053_000
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("metadata", [
+    None,
+    [],
+    ["HBAR-USDT"],
+    "HBAR-USDT",
+    42,
+    True,
+    {},
+    {**Exchange.metadata, "baseIncrement": []},
+    {**Exchange.metadata, "priceIncrement": "NaN"},
+    {**Exchange.metadata, "quoteIncrement": "0"},
+], ids=[
+    "null", "empty-list", "list", "string", "number", "boolean",
+    "empty-object", "invalid-base-increment", "invalid-price-increment", "invalid-quote-increment",
+])
+def test_kucoin_invalid_symbol_metadata_discards_cached_book(metadata):
+    class RecordingExchange(Exchange):
+        def __init__(self):
+            super().__init__()
+            self.requests = []
+
+        async def kucoin(self, resource):
+            self.requests.append(resource)
+            return await super().kucoin(resource)
+
+    async def exercise():
+        api = RecordingExchange()
+        cex = KuCoin(api)
+        original = await cex.snapshot()
+        valid_metadata = api.metadata
+        # Force a metadata refresh with the prior book still eligible for fallback.
+        cex._increments = None
+        api.metadata = metadata
+        api.requests.clear()
+        with pytest.raises(MarketDataError, match="KuCoin|exchange"):
+            await cex.snapshot()
+        assert api.requests == ["symbol"]
+        assert cex._increments is None
+        assert cex._book is None
+        with pytest.raises(MarketDataError, match="invalidated"):
+            cex.price(original, Side.BUY)
+
+        api.metadata = valid_metadata
+        api.down = True
+        with pytest.raises(Unavailable, match="depth unavailable"):
+            await cex.snapshot()
+        assert cex.cache_hits == 0
+
+        api.down = False
+        assert (await cex.quote(Side.BUY, TRADE_UNITS)).quote_units == 53_053_000
+
+    asyncio.run(exercise())
