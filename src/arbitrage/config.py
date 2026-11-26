@@ -23,6 +23,14 @@ class Simulation(Record):
     gas_price_cap_multiple: Annotated[Exact, Field(ge=1)]
     cex_fee_fraction: Annotated[Exact, Field(ge=0, lt=1)]
     usdc_usdt_parity: Literal[True]
+    hedera_estimate_sender: Annotated[str, Field(strict=True, pattern=r"^0x[0-9a-fA-F]{40}$")] | None = None
+
+    @field_validator("hedera_estimate_sender")
+    @classmethod
+    def public_estimation_address(cls, value: str | None) -> str | None:
+        if value == "0x" + "0" * 40:
+            raise ValueError("address must refer to nonzero public state")
+        return value.lower() if value else None
 
     @field_validator("trade_hbar", "duration_hours", "worker_capacity", "max_active_workers", mode="before")
     @classmethod

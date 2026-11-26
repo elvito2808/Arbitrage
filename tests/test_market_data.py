@@ -11,7 +11,7 @@ from arbitrage.kucoin import TOPIC, KuCoin
 from arbitrage.market_data import MarketDataError, PublicConnections, Unavailable
 from arbitrage.models import Side
 from arbitrage.saucerswap import (
-    FACTORY, PAIR, ROUTER, TRADE_UNITS, USDC, WHBAR, GasEstimate, SaucerSwap, amounts, word,
+    FACTORY, HISTORICAL_GAS, PAIR, ROUTER, TRADE_UNITS, USDC, WHBAR, GasEstimate, SaucerSwap, amounts, word,
 )
 
 POOL_TIME = datetime(2026, 11, 26, 1, 30, 14, tzinfo=UTC)
@@ -98,7 +98,9 @@ def test_historical_dex_integer_router_and_gas():
     for side, gas in zip((Side.BUY, Side.SELL), snapshot.gas, strict=True):
         assert gas.side == side
         assert gas.price_range_weibars == (1_630_000_000_000, 3_260_000_000_000)
-        assert gas.capped_proxy_weibars == 798_142_540_000_000_000
+        assert gas.route_evidence is None
+        assert gas.estimation_error == "estimate_sender_unconfigured"
+        assert HISTORICAL_GAS.calculated_gas_tinybars == HISTORICAL_GAS.charged_gas_tinybars == 22_762_599
         assert gas.execution_gas is None and not gas.cost_valid
         assert replace(gas, execution_gas=250_000).cost_valid
         assert not GasEstimate(side, None, None, execution_gas=250_000).cost_valid

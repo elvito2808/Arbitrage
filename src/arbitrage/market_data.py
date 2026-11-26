@@ -166,7 +166,7 @@ class PublicConnections:
                 await socket.close()
 
     async def rpc(self, method: str, *params: object) -> Any:
-        if method not in {"eth_chainId", "eth_getBlockByNumber", "eth_gasPrice", "eth_call"}:
+        if method not in {"eth_chainId", "eth_getBlockByNumber", "eth_gasPrice", "eth_estimateGas", "eth_call"}:
             raise MarketDataError("RPC method is outside the public read scope")
         request_id = next(self._ids)
         data = await self._json("POST", RPC, {
