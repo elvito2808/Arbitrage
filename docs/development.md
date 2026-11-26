@@ -173,3 +173,13 @@ holds, together with any fill, fee, gas and corresponding ledger identifiers.
 `simulation_misses` records reasons when the analysis passed but admission did
 not. Other rejection reasons remain in `analysis_cycles`. Query operational
 SQLite files only in private runtime storage.
+
+## Hedera route estimation
+
+The simulator models SaucerSwap V1 trades using its virtual WHBAR and USDC holdings. The unsigned estimation calls use `swapTokensForExactTokens` for an exact 1,000 WHBAR BUY and `swapExactTokensForTokens` for an exact 1,000 WHBAR SELL. Each includes the corresponding path, amount and slippage bound, recipient, deadline, and zero native value. The historical PDF’s payable `swapExactETHForTokens` follows a different entry point.
+
+The optional `simulation.hedera_estimate_sender` TOML setting is a public EVM address for Hashio to read as sender and recipient during estimation. Its current public state must be suitable for the routes, including token balances, associations and allowance. The default configuration leaves it unset and produces gross-only DEX pricing. The simulator never establishes these prerequisites or requests a key. An account mentioned in a historical transaction need not be suitable today. A rejected estimation affects only the corresponding side. A shared invalid gas price, unidentified route context or RPC head change prevents use of affected estimates.
+
+Verified current estimates retain the provider, chain, bracketed head, unsigned call, raw gas units, price units and times in the persisted evaluation. Gross quotes are in the requested DEX quote. Net DEX quotes include estimated gas at the current RPC price and the fee-free valuation of fresh KuCoin HBAR depth under simulation parity. Risk admission applies the configured conservative gas price cap separately. The model estimates the execution gas component. Future fees can vary with actual gas used, price and other transaction charges.
+
+[Provider and calibration evidence](../project/evidence/ARB-P07.1-gas/verification.md)
