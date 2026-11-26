@@ -1,0 +1,63 @@
+P07 independent offline verification, 2026-11-26 UTC
+
+Project B baseline 0b06c49eee68ff9cc6e25cec99bce5ef0baf6bea
+Framework A pin cb23c4b08d2103aead243b59d6b66f325361a4bc
+Task commit 115c72168516682f142a1d0305c92fce644b3b03
+Task blob ba81778ac5ee366daf8ca9e38fafb14dd9bd9ee6
+Test source commit 0fb96c36ac6f21a30cfecae5fa442b8261b4e05a
+
+Commands from independent B checkout. The first four establish provenance and access.
+git ls-remote origin refs/heads/main refs/heads/agent-3/arb-047-055
+git merge-base --is-ancestor 115c72168516682f142a1d0305c92fce644b3b03 origin/main
+git checkout -qb agent-3/arb-047-055 0b06c49eee68ff9cc6e25cec99bce5ef0baf6bea
+git push --dry-run origin HEAD:refs/heads/agent-3/arb-047-055
+Each exited 0. Remote main matched baseline and publication branch was absent at preflight.
+
+python3.12 -VV
+python3.12 -m venv ../venv
+../venv/bin/python -m pip install '.[test]'
+../venv/bin/python -m pip check
+All exited 0. Python 3.12.14, clean installed wheel arbitrage-simulation 0.1.0,
+SHA-256 b19102e21f2fb8a63b67040a673ab7ba3f117401d3b17d84119eba7fd03d82cd.
+pip check reported no broken requirements.
+
+../venv/bin/python -c 'import arbitrage,pathlib,sqlite3,sys; installed=pathlib.Path(arbitrage.__file__).parent; assert installed.is_relative_to(sys.prefix); sources=list(pathlib.Path("src/arbitrage").glob("*.py")); assert all(p.read_bytes()==(installed/p.name).read_bytes() for p in sources); print(sys.version.split()[0],sqlite3.sqlite_version,len(sources))'
+Exit 0. Python 3.12.14, SQLite 3.53.1, 14 matched modules.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest tests --ignore=tests/qa -q -rs
+Exit 0. 133 passed, 3 skipped, 1.69 s. Public network smoke is opt-in.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest tests/qa -q --tb=short
+Exit 1. Initial independent QA suite, 29 passed, 3 failed, 2.94 s.
+P07-01 expected MarketDataError. The adapter returned a snapshot.
+P07-02 expected sqlite3.IntegrityError. Both update and delete succeeded.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest tests/qa/test_p07_faults.py -q
+Exit 0. 8 passed.
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest tests/qa/test_p07_financial.py -q
+Exit 0. 22 passed.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest tests/qa/test_p07_storage.py -q -k 'atomic_reservation or export_race'
+Five executions, each exit 0 with 2 passed and 2 deselected.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest -q -rs --tb=short
+Exit 1. Full suite, 176 passed, 3 failed, 3 skipped, 4.26 s.
+This was the second execution of the failing groups. No further retry.
+FAILED tests/qa/test_p07_integration.py::test_wrong_kucoin_symbol_is_rejected
+  Failed: DID NOT RAISE MarketDataError
+FAILED tests/qa/test_p07_storage.py::test_database_rejects_rewriting_posted_ledger[UPDATE ledger SET delta_units=1]
+  Failed: DID NOT RAISE IntegrityError
+FAILED tests/qa/test_p07_storage.py::test_database_rejects_rewriting_posted_ledger[DELETE FROM ledger]
+  Failed: DID NOT RAISE IntegrityError
+SKIPPED [3] tests/test_market_smoke.py: public network smoke is opt-in.
+
+Production-shaped replay: buy_dex and sell_dex each persisted as
+market_candidate / gas_unknown. Eligible evaluations, simulated trades,
+simulation events, executions, holds, ledger entries and changed balance
+rows were all zero. Persisted workbook showed two observations and
+zero reconciliation discrepancies across the five opening holdings.
+
+Publication review: git diff --check against the baseline passed. The changed
+paths were restricted to tests/qa, this evidence directory and the P07 report.
+A credential-pattern scan of source, configuration, service template and QA
+changes found no matches for the scanned private-key, GitHub, AWS and API token shapes.
