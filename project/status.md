@@ -1,23 +1,19 @@
 # Arbitrage project status — 2026-11-26 UTC
 
-**Project:** ARB. **Roadmap:** ARB-RM-001 rev 1.0.0 approved in project/decisions.md. Framework A pinned to `cb23c4b08d2103aead243b59d6b66f325361a4bc` (read-only). B original owner-authorized baseline `1baff43168e7d17060d44a49d10225857b87a0af`; P01 evidence merged to main `b4ed121aac1249352dccf4a5d4353765e66dfee5`. This status amendment is submitted through PR from `agent-0/arb-p01-acceptance`.
+Framework A pinned: `cb23c4b08d2103aead243b59d6b66f325361a4bc` read-only. Repository B: `elvito2808/Arbitrage`, canonical `main`. Owner approval of ARB-RM-001 v1.0.0 and SIMULATION ONLY: project/decisions.md. Original approved B baseline: `1baff43168e7d17060d44a49d10225857b87a0af`.
 
-**Latest verified milestone:** P01 bounded public-data feasibility. Agent 1 head `09f43c2e48a7db3413a7565766cad0150982e1c5`, reviewed/merged PR #1. Evidence: project/reports/ARB-005-011.md, project/evidence/ARB-005-011/, and agent-0-review.md. External API endurance, account-dependent execution and accurate per-route gas are NOT verified.
+**Accepted verified milestones (bounded):** P01 ARB-006–011 merged PR #1 at `b4ed121aac1249352dccf4a5d4353765e66dfee5`; P02 ARB-012–017 Agent 1 head `8e296f8ea19fdabc3e90fd255eb22ea036886e89` reviewed in PR #4 and merged at `633ec6573e650bf7846621aea797f2223b3ccae2`. Review artifacts: `project/evidence/ARB-005-011/agent-0-review.md` and `project/evidence/ARB-012-017/agent-0-review.md`. P02 35 tests are documented as **specialist-run** and inspected, not independently re-executed by Agent 0. No CI status checks.
 
-**Open prerequisite:** Durable independent owner-controlled Git bundle copies and isolated restore of BOTH repositories (A+B) at accepted revisions remain pending. A temporary bundle/restore was evidenced, but does not meet durable backup policy. See project/backups.md and project/backup-instructions.md. No P02 implementation modifications until backup gate accepted.
+| Stage | Assignment and evidence | Execution | Verification disposition | Next action |
+|---|---|---|---|---|
+| P00 ARB-001–005 | B project records and ARB-005 temporary bundle restore in PR #1 | ended | Governance initialized; temporary restore evidence inspected; independent durable backup DEFERRED | Retain risk |
+| P01 ARB-006–011 | Agent 1 task rev1, PR #1 | ended | VERIFIED bounded public-data feasibility only | P03 may depend on findings |
+| P02 ARB-012–017 | Agent 1 task rev2, PR #4 | ended | ACCEPTED/VERIFIED bounded Python infrastructure; test execution specialist-reported | P03 permitted |
+| P03 ARB-018–025 | Agent 2 task rev1 `project/tasks/ARB-018-025.md` | planned; owner-supervised Codex dispatch pending | No report | Provide exact post-management-PR baseline to owner |
+| P04–P09 | Not yet assigned | planned | No report | Hold for phase prerequisites and separate deployment authorization |
 
-| Stage/tasks | Assignment | Execution | Verification | Dependencies | Evidence | Next |
-|---|---|---|---|---|---|---|
-| P00 ARB-001–004 | Agent 0 initialization | ended | partially VERIFIED; original governance records committed | Roadmap v1.0.0 | context/requirements/roadmap/roles/decisions | Maintain records and checkpoint |
-| P00 ARB-005 | Agent 1 ARB-005-011 rev 1 | ended | temporary restore VERIFIED from inspected evidence; durable backup PENDING | Original approved baseline | PR #1, backup-restore.txt | Owner persistent backup + isolated verification |
-| P01 ARB-006–011 | Agent 1 ARB-005-011 rev 1 | ended | VERIFIED for bounded public-data feasibility only | Owner-approved scope | PR #1, agent-0-review.md | Preserve unresolved operating risks |
-| P02 ARB-012–017 | Agent 1 task rev 1 | planned, BACKUP-GATED | No report | P01 accepted + durable backup | project/tasks/ARB-012-017.md | Dispatch after backup gate verified |
-| P03–P09 | Not assigned | planned | No report | Earlier milestones | project/roadmap.md | Not released |
+**Owner backup decision:** Owner deferred personal-machine operation and owner-controlled durable backup; entry in decisions.md. This is not backup verification. No owner-side local execution required for cloud-only development. This deliberately leaves the independent A+B recovery safeguard unsatisfied; do not claim otherwise.
 
-**Current blocked / unverified:** Owner-controlled independent backup, actual 24h service continuity, representative swap gas both directions, cost/latency under sustained load, any real-market profitability. No LIVE, credentials, server deployment or additional costs authorized. No autonomous Codex dispatch; owner relays English bounded assignment.
+**Outstanding technical risks:** route-specific gas under representative conditions, public-provider 24-hour continuity/quotas, quote freshness and cross-exchange clock skew, market-depth movement, crash/power-loss recovery and production logging sink. No live orders or signing, no sensitive credentials, no paid resources, no server deployment. New code and tests must remain SIMULATION ONLY.
 
-**Recovery:** project/checkpoints/CP-001.md original initialization, new CP-002 approval handoff, and project/backups.md. Do not conflate GitHub source repository with independent offline backup. No active trading or background task.
-
-
-## Owner decision — 2026-11-26
-Owner explicitly requests proceeding without local execution or personal-system backup at this stage. Durable independent backup is deferred, not VERIFIED. This supersedes the P02 backup gate in prior records; retain recovery risk and temporary restore evidence. No change to A, no live trading, no deployment or added cost. P02 may proceed in Codex Cloud. Owner instruction: «من فعلا نیازی به نسخه پشتیبانی روی سیستم خودم ندارم. پروژه بدون اینکه لازم باشد نسخه ای را روی سیستم خودم اجرا کنم، جلو ببر.»
+**Checkpoint/recovery:** CP-001, CP-002, CP-003, project/backups.md. P03 must verify precise approved B HEAD and task/role revisions before writing. No autonomous Codex dispatch.
