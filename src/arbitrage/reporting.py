@@ -199,7 +199,7 @@ def metadata(db, sheets):
         sheets.write("Health", f"worker {reference(row['id'])}", row["state"])
     if health:
         health = json.loads(health["payload"])
-        for key in ("observed_at", "ws", "retries", "cache_hits", "queue_drops"):
+        for key in ("observed_at", "ws", "kucoin_source", "retries", "cache_hits", "queue_drops"):
             sheets.write("Health", key, health.get(key))
         for venue, status in health["rest"].items():
             sheets.write("Health", f"{venue} REST", status)
@@ -208,7 +208,8 @@ def metadata(db, sheets):
                 sheets.write("Health", f"{venue} {key} at health sample", snap.get(key) if snap else None)
         for event in health["recent_events"]:
             sheets.write("Operational events", event["at"], event["event"], event["level"],
-                         reference(event.get("worker")), reference(event.get("cycle")))
+                         reference(event.get("worker")), reference(event.get("cycle")),
+                         event.get("source"), event.get("reason"))
 
 
 def legacy(db, sheets):
@@ -255,7 +256,7 @@ def export(database: Path, destination: Path):
         "Sessions": ("session", "worker", "state", "start UTC", "deadline UTC", "last wall time UTC", "ended UTC"),
         "Configuration": ("session", "applied UTC", "section", "setting", "value"),
         "Health": ("metric", "value"),
-        "Operational events": ("at UTC", "event", "severity", "worker", "cycle"),
+        "Operational events": ("at UTC", "event", "severity", "worker", "cycle", "source", "reason"),
         "Legacy opportunities": ("opportunity", "worker", "direction", "observed UTC", "indicative USDT",
                                  "status", *QUOTE),
         "Legacy executions": ("execution", "opportunity", "outcome", "observed UTC", *QUOTE),

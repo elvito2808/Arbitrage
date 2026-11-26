@@ -154,6 +154,8 @@ class PublicConnections:
 
     @asynccontextmanager
     async def kucoin_socket(self, endpoint: str, token: str, connect_id: str):
+        if self.before_request:
+            self.before_request()
         async with asyncio.timeout(5):
             socket = await self.session.ws_connect(
                 endpoint, params={"token": token, "connectId": connect_id},

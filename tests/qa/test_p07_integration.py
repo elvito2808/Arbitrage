@@ -55,6 +55,9 @@ class ReplaySession:
             assert json["method"] in {"eth_chainId", "eth_getBlockByNumber", "eth_call", "eth_gasPrice"}
             result = await self.hedera.rpc(json["method"], *json["params"])
             body = {"jsonrpc": "2.0", "id": json["id"], "result": result}
+        elif url == "https://api.kucoin.com/api/v1/bullet-public":
+            assert method == "POST"
+            body = {"code": "400100", "data": {}}
         elif url.startswith("https://mainnet-public.mirrornode.hedera.com/api/v1/blocks/"):
             assert method == "GET"
             body = await self.hedera.mirror_block(int(url.rsplit("/", 1)[1]))

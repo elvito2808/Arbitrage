@@ -10,7 +10,7 @@ from fractions import Fraction
 from uuid import uuid4
 
 from .config import Simulation
-from .kucoin import SYMBOL, Book, InsufficientDepth, KuCoin, priced_units, validate_book
+from .kucoin import Book, InsufficientDepth, KuCoin, priced_units, validate_book
 from .market_data import (
     MAX_AGE, MAX_SKEW, TRADE_UNITS, MarketDataError, PublicConnections, StaleSnapshot, Unavailable,
     require_fresh, utc_now,
@@ -122,7 +122,7 @@ class OpportunityCoordinator:
             return (
                 SnapshotObservation(id=f"{NETWORK}:{pool.block}:{pool.block_hash}",
                                     source_at=pool.source_at, received_at=pool.received_at),
-                SnapshotObservation(id=f"kucoin:{SYMBOL}:{book.sequence}",
+                SnapshotObservation(id=book.snapshot_id,
                                     source_at=book.source_at, received_at=book.received_at),
             )
         except ValueError:
@@ -312,7 +312,7 @@ class OpportunityCoordinator:
             except InvalidCycle as error:
                 reason = error.reason
         if reason is None:
-            ids = (market.dex_snapshot.id, market.cex_snapshot.id)
+            ids = self._snapshot_ids(market)
             if any(tx.seen_snapshot(NETWORK, key) for key in ids):
                 reason = Reason.DUPLICATE_SNAPSHOT
         if reason is not None:
@@ -328,6 +328,10 @@ class OpportunityCoordinator:
             self._after_analysis(tx, result, market, now)
         tx.release_analysis(NETWORK, cycle_id, now)
         return result
+
+    @staticmethod
+    def _snapshot_ids(market: Market) -> tuple[str, str, str]:
+        return market.dex_snapshot.id, market.cex_snapshot.id, market.book.timestamp_id
 
     def _after_analysis(
         self, tx: Transaction, cycle: AnalysisCycle, market: Market, now: datetime,

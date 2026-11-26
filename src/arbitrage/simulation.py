@@ -154,7 +154,7 @@ class SimulationEngine(OpportunityCoordinator):
         if (not tx.owns_analysis(NETWORK, cycle.id, now)
                 or worker is None or worker.state != WorkerState.RUNNING
                 or tx.analysis(cycle.id) != cycle
-                or not tx.owns_snapshots(NETWORK, cycle.id, (market.dex_snapshot.id, market.cex_snapshot.id))):
+                or not tx.owns_snapshots(NETWORK, cycle.id, self._snapshot_ids(market))):
             tx.simulation_miss(cycle.id, "cycle_fence_lost")
             return
         try:

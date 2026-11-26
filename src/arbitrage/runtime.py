@@ -1,4 +1,4 @@
-"""Persistent foreground supervision for the analysis-only public engine."""
+"""Persistent foreground supervision for the simulation engine."""
 
 import asyncio
 import fcntl
@@ -240,13 +240,14 @@ class Runtime:
             health = tx._db.execute("SELECT payload FROM runtime_health WHERE id=1").fetchone()
             unresolved = tx.unresolved_simulation(NETWORK)
             return {
-                "mode": "public analysis only", "session": session,
+                "mode": "simulation", "session": session,
                 "foreground_owner_present": owner_present,
                 "emergency_latched": bool(tx._db.execute("SELECT 1 FROM runtime_stop_latch").fetchone()),
                 "analysis_cycles": tx._db.execute("SELECT count(*) FROM analysis_cycles").fetchone()[0],
                 "simulated_trades": tx._db.execute("SELECT count(*) FROM simulated_trades").fetchone()[0],
                 "workers": {worker: tx.worker(worker).state for worker in WORKERS},
                 "unsettled": "manual review required" if unresolved else None,
+                "execution_status": unresolved["status"] if unresolved else "idle",
                 "health": json.loads(health["payload"]) if health else None,
             }
 
@@ -257,7 +258,8 @@ class Runtime:
             previous = json.loads(row["payload"]) if row else {}
             health = {
                 "observed_at": now.isoformat(),
-                "ws": "disabled_rest_only",
+                "ws": engine.cex.depth_stream.health,
+                "kucoin_source": engine.cex.source,
                 "rest": {name: public.health.get(urlsplit(url).hostname, "unknown")
                          for name, url in (("hedera_rpc", RPC), ("hedera_mirror", MIRROR), ("kucoin", KUCOIN))},
                 "retries": previous.get("retries", 0) + public.retries,
@@ -284,11 +286,13 @@ class Runtime:
             await self.sleep(POLL_SECONDS)
 
     async def _cycles(self, engine, public, worker_id):
+        await engine.recover()
         while self.tick(worker_id):
             cycle = await engine.worker(worker_id).analyze()
             severity = Level.WARNING if cycle.dex_snapshot is None or cycle.cex_snapshot is None else Level.INFO
             self.log.emit(Event.ANALYSIS, severity, worker=worker_id, cycle=cycle.id)
             self._health(public, engine, cycle)
+            await engine.recover()
             await self.sleep(MIN_INTERVAL.total_seconds())
 
     async def run(self, worker_id, config, shutdown):
@@ -304,16 +308,20 @@ class Runtime:
                 Reason.WORKER_INACTIVE if shutdown.is_set() else self.gate(tx, worker, now)
             )
             self.log.emit(Event.WORKER_STATE, worker=worker_id)
+            engine.cex.on_source_change = lambda source, reason: self.log.emit(
+                Event.CONNECTION_STATUS, worker=worker_id, source=source, reason=reason,
+            )
+            stream = asyncio.create_task(engine.cex.depth_stream.run())
             watch = asyncio.create_task(self._watch(worker_id, shutdown))
             cycles = asyncio.create_task(self._cycles(engine, public, worker_id))
             try:
-                done, _ = await asyncio.wait((watch, cycles), return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait((watch, cycles, stream), return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     task.result()
             finally:
-                for task in (watch, cycles):
+                for task in (watch, cycles, stream):
                     task.cancel()
-                await asyncio.gather(watch, cycles, return_exceptions=True)
+                await asyncio.gather(watch, cycles, stream, return_exceptions=True)
                 if shutdown.is_set():
                     with self.storage.transaction() as tx:
                         row = self.latest(tx)
