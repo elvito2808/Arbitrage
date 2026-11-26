@@ -3,14 +3,15 @@
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .models import (
-    MAX_UNITS, WORKER_CAPACITY, Balance, Execution, Experiment, Holding,
-    LedgerEntry, Opportunity, Reservation, Worker, WorkerState,
+    MAX_UNITS, WORKER_CAPACITY, AnalysisCycle, Balance, Execution, Experiment, Holding,
+    LedgerEntry, Opportunity, Reason, Reservation, Worker, WorkerState,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = (
     """CREATE TABLE balances (
@@ -51,6 +52,28 @@ _SCHEMA = (
 )
 
 
+_ANALYSIS_SCHEMA = (
+    """CREATE TABLE analysis_cycles (
+        id TEXT PRIMARY KEY,
+        worker_id TEXT NOT NULL REFERENCES workers(id),
+        payload TEXT NOT NULL
+    ) STRICT""",
+    """CREATE TABLE analyzed_snapshots (
+        network TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        cycle_id TEXT NOT NULL REFERENCES analysis_cycles(id),
+        PRIMARY KEY (network, snapshot_id)
+    ) STRICT""",
+    """CREATE TABLE analysis_slots (
+        network TEXT PRIMARY KEY,
+        cycle_id TEXT NOT NULL,
+        worker_id TEXT NOT NULL REFERENCES workers(id),
+        expires_at TEXT NOT NULL,
+        next_at TEXT NOT NULL
+    ) STRICT""",
+)
+
+
 class Storage:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -60,9 +83,9 @@ class Storage:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version == SCHEMA_VERSION:
                 return
-            if version != 0:
+            if version not in (0, 1):
                 raise ValueError(f"unsupported SQLite schema version {version}")
-            for statement in _SCHEMA:
+            for statement in (_SCHEMA + _ANALYSIS_SCHEMA if version == 0 else _ANALYSIS_SCHEMA):
                 db.execute(statement)
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -173,6 +196,70 @@ class Transaction:
     def worker(self, worker_id: str) -> Worker | None:
         row = self._db.execute("SELECT * FROM workers WHERE id = ?", (worker_id,)).fetchone()
         return Worker.model_validate(dict(row)) if row else None
+
+    def claim_analysis(
+        self, network: str, cycle_id: str, worker_id: str, now: datetime,
+        lease: timedelta, interval: timedelta,
+    ) -> Reason | None:
+        worker = self.worker(worker_id)
+        if worker is None or worker.state != WorkerState.RUNNING:
+            return Reason.WORKER_INACTIVE
+        slot = self._analysis_slot(network)
+        if slot:
+            if now < datetime.fromisoformat(slot["expires_at"]):
+                return Reason.CYCLE_BUSY
+            if now < datetime.fromisoformat(slot["next_at"]):
+                return Reason.NETWORK_QUOTA
+        self._db.execute(
+            """INSERT INTO analysis_slots VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(network) DO UPDATE SET cycle_id = excluded.cycle_id,
+               worker_id = excluded.worker_id, expires_at = excluded.expires_at,
+               next_at = excluded.next_at""",
+            (network, cycle_id, worker_id, (now + lease).isoformat(), (now + interval).isoformat()),
+        )
+        return None
+
+    def _analysis_slot(self, network: str) -> sqlite3.Row | None:
+        return self._db.execute(
+            "SELECT * FROM analysis_slots WHERE network = ?", (network,)
+        ).fetchone()
+
+    def worker_has_analysis(self, network: str, worker_id: str, now: datetime) -> bool:
+        slot = self._analysis_slot(network)
+        return bool(slot and slot["worker_id"] == worker_id
+                    and now < datetime.fromisoformat(slot["expires_at"]))
+
+    def owns_analysis(self, network: str, cycle_id: str, now: datetime) -> bool:
+        slot = self._analysis_slot(network)
+        return bool(slot and slot["cycle_id"] == cycle_id and now < datetime.fromisoformat(slot["expires_at"]))
+
+    def release_analysis(self, network: str, cycle_id: str, now: datetime) -> None:
+        self._db.execute(
+            "UPDATE analysis_slots SET expires_at = ? WHERE network = ? AND cycle_id = ?",
+            (now.isoformat(), network, cycle_id),
+        )
+
+    def seen_snapshot(self, network: str, snapshot_id: str) -> bool:
+        return self._db.execute(
+            "SELECT 1 FROM analyzed_snapshots WHERE network = ? AND snapshot_id = ?",
+            (network, snapshot_id),
+        ).fetchone() is not None
+
+    def add_analysis(
+        self, network: str, cycle: AnalysisCycle, snapshot_ids: tuple[str, ...] = (),
+    ) -> None:
+        self._db.execute(
+            "INSERT INTO analysis_cycles VALUES (?, ?, ?)",
+            (cycle.id, cycle.worker_id, cycle.model_dump_json()),
+        )
+        self._db.executemany(
+            "INSERT INTO analyzed_snapshots VALUES (?, ?, ?)",
+            [(network, snapshot_id, cycle.id) for snapshot_id in snapshot_ids],
+        )
+
+    def analysis(self, cycle_id: str) -> AnalysisCycle | None:
+        row = self._db.execute("SELECT payload FROM analysis_cycles WHERE id = ?", (cycle_id,)).fetchone()
+        return AnalysisCycle.model_validate_json(row["payload"]) if row else None
 
     def add_opportunity(self, opportunity: Opportunity) -> None:
         self._db.execute(
