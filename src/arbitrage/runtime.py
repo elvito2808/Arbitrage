@@ -242,14 +242,19 @@ class Runtime:
                 session["state"] = "expired"
             health = tx._db.execute("SELECT payload FROM runtime_health WHERE id=1").fetchone()
             unresolved = tx.unresolved_simulation(NETWORK)
+            emergency = bool(tx._db.execute("SELECT 1 FROM runtime_stop_latch").fetchone())
+            unsettled = None
+            if unresolved:
+                unsettled = ("manual review required" if emergency or unresolved["status"] == "manual_review"
+                             else "pending recovery")
             return {
                 "mode": "simulation", "session": session,
                 "foreground_owner_present": owner_present,
-                "emergency_latched": bool(tx._db.execute("SELECT 1 FROM runtime_stop_latch").fetchone()),
+                "emergency_latched": emergency,
                 "analysis_cycles": tx._db.execute("SELECT count(*) FROM analysis_cycles").fetchone()[0],
                 "simulated_trades": tx._db.execute("SELECT count(*) FROM simulated_trades").fetchone()[0],
                 "workers": {worker: tx.worker(worker).state for worker in WORKERS},
-                "unsettled": "manual review required" if unresolved else None,
+                "unsettled": unsettled,
                 "execution_status": unresolved["status"] if unresolved else "idle",
                 "health": json.loads(health["payload"]) if health else None,
             }
