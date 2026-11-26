@@ -379,7 +379,15 @@ def test_persistent_stream_buffers_during_dex_and_preserves_selected_book(setup,
     asyncio.run(exercise())
 
 
-def test_malformed_depth_does_not_refresh_or_mutate_last_valid_book():
+def test_malformed_depth_does_not_refresh_or_mutate_last_valid_book(monkeypatch):
+    timeout_at = asyncio.timeout_at
+    deadlines = []
+
+    def record_deadline(deadline):
+        deadlines.append(deadline)
+        return timeout_at(deadline)
+
+    monkeypatch.setattr("arbitrage.kucoin.asyncio.timeout_at", record_deadline)
     async def exercise():
         socket = DepthSocket()
         api = DepthExchange(socket)
@@ -388,12 +396,14 @@ def test_malformed_depth_does_not_refresh_or_mutate_last_valid_book():
         async with running(cex):
             await socket.reading(4)
             original = await cex.snapshot()
+            valid_depth_deadline = deadlines[-1]
             api.now += timedelta(seconds=1)
             api.depth["time"] += 1000
             malformed = frame(api)
             malformed["data"]["bids"][0][1] = "0"
             socket.messages.put_nowait(malformed)
             await socket.reading(5)
+            assert deadlines[-1] == valid_depth_deadline
             assert await cex.snapshot() is original
             assert cex.depth_stream.last_valid_received_at == original.received_at
             assert api.connects == 1 and api.rest_reads == 0

@@ -417,6 +417,7 @@ async def kucoin_subscription(public: PublicConnections, topic: str):
 async def kucoin_messages(
     ws: aiohttp.ClientWebSocketResponse, topic: str, interval: float, timeout: float,
     connect_id: str, max_silence: float | None = None,
+    validated_source: Callable[[], datetime | None] | None = None,
 ) -> AsyncIterator[dict]:
     """Read public data with heartbeat and an optional advancing depth deadline."""
     loop = asyncio.get_running_loop()
@@ -453,10 +454,11 @@ async def kucoin_messages(
             continue
         if message.get("topic") != topic:
             raise MarketDataError("unexpected KuCoin WS market")
-        data = message.get("data")
-        timestamp = data.get("timestamp") if max_silence is not None and isinstance(data, dict) else None
         yield message
-        if type(timestamp) is int and (last_timestamp is None or timestamp > last_timestamp):
+        timestamp = validated_source() if validated_source is not None else None
+        if max_silence is not None and timestamp is not None and (
+            last_timestamp is None or timestamp > last_timestamp
+        ):
             data_due = loop.time() + max_silence
             last_timestamp = timestamp
 
@@ -496,11 +498,15 @@ class KuCoinDepthStream:
     async def _listen(self, recovering: bool) -> None:
         steps = await self.market._market_increments()
         previous: Book | None = None
+        validated_timestamp: datetime | None = None
         silence = self.market.cache_age.total_seconds()
         async with kucoin_subscription(self.public, DEPTH_TOPIC) as (socket, interval, timeout, connection):
             self.health = "awaiting_depth"
             try:
-                async for message in kucoin_messages(socket, DEPTH_TOPIC, interval, timeout, connection, silence):
+                async for message in kucoin_messages(
+                    socket, DEPTH_TOPIC, interval, timeout, connection, silence,
+                    lambda: validated_timestamp,
+                ):
                     data = message.get("data")
                     try:
                         if message.get("subject") != "level2" or not isinstance(data, dict):
@@ -538,6 +544,7 @@ class KuCoinDepthStream:
                         self.health = "healthy"
                         self.initial_attempt.set()
                     previous = book
+                    validated_timestamp = book.source_at
             except (Unavailable, TimeoutError, aiohttp.ClientError, aiohttp.WSMessageTypeError):
                 self._reset("websocket_unavailable")
                 raise
