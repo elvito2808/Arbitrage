@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from fractions import Fraction
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
@@ -273,10 +274,21 @@ class Evaluation(Record):
         return self
 
 
+class KuCoinBookObservation(Record):
+    symbol: Literal["HBAR-USDT"]
+    transport: Literal["websocket", "rest"]
+    bid_price: Fraction
+    bid_quantity: Fraction
+    ask_price: Fraction
+    ask_quantity: Fraction
+
+
 class SnapshotObservation(Record):
     id: Identifier
     source_at: Timestamp
     received_at: Timestamp
+    completed_at: Timestamp | None = None
+    kucoin_book: KuCoinBookObservation | None = None
 
 
 class AnalysisCycle(Record):

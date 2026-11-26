@@ -181,7 +181,7 @@ def test_initial_failure_rest_during_reconnect_and_two_fresh_frames_to_recover()
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("failure", ["wrong_market", "stale", "invalid_volume", "heartbeat_silence"])
+@pytest.mark.parametrize("failure", ["wrong_market", "stale", "heartbeat_silence"])
 def test_unusable_websocket_does_not_enter_pricing(failure):
     async def run():
         socket = DepthSocket()
@@ -197,8 +197,6 @@ def test_unusable_websocket_does_not_enter_pricing(failure):
                 bad["topic"] = DEPTH_TOPIC.replace("HBAR", "BTC")
             elif failure == "stale":
                 bad["data"]["timestamp"] -= 1000
-            elif failure == "invalid_volume":
-                bad["data"]["bids"][0][1] = "0"
             if failure != "heartbeat_silence":
                 socket.messages.put_nowait(bad)
             assert await api.backoffs.get() == 1
@@ -292,3 +290,117 @@ def test_websocket_recovery_ignores_the_last_accepted_image():
             assert (await cex.snapshot()).source == "websocket"
 
     asyncio.run(run())
+
+
+def test_persistent_stream_buffers_during_dex_and_preserves_selected_book(setup, monkeypatch):
+    _, market, coordinator = setup
+    monkeypatch.setattr("arbitrage.coordinator.MIN_INTERVAL", timedelta(seconds=1))
+
+    async def exercise():
+        socket = DepthSocket()
+        api = DepthExchange(socket)
+        api.now = market.now
+        api.depth["time"] = int((market.now - market.dex_age).timestamp() * 1000)
+        coordinator.cex = cex = KuCoin(api)
+        worker = coordinator.worker("persistent-depth")
+        worker.start()
+        started = asyncio.Event()
+        release = asyncio.Event()
+        order = []
+        selected = []
+        original_dex, original_cex, original_market = market.snapshot, cex.snapshot, coordinator._market
+
+        async def dex():
+            order.append("dex:start")
+            started.set()
+            await release.wait()
+            result = await original_dex()
+            order.append("dex:done")
+            return result
+
+        async def kucoin():
+            order.append("kucoin:select")
+            book = await original_cex()
+            selected.append(book)
+            return book
+
+        def evaluate(pool, book, observations, now):
+            order.append("market:evaluate")
+            assert book is selected[-1]
+            return original_market(pool, book, observations, now)
+
+        monkeypatch.setattr(market, "snapshot", dex)
+        monkeypatch.setattr(cex, "snapshot", kucoin)
+        monkeypatch.setattr(coordinator, "_market", evaluate)
+
+        async with running(cex):
+            socket.messages.put_nowait(frame(api))
+            await socket.reading(4)
+            first = asyncio.create_task(worker.analyze())
+            try:
+                await started.wait()
+                api.depth["time"] += 1
+                update = frame(api)
+                update["data"]["asks"][0][1] = "250"
+                socket.messages.put_nowait(update)
+                await socket.reading(5)
+                assert order == ["dex:start"]
+                release.set()
+                first_cycle = await first
+            finally:
+                if not first.done():
+                    first.cancel()
+                    await asyncio.gather(first, return_exceptions=True)
+
+            assert first_cycle.dex_snapshot.completed_at == market.now
+            assert first_cycle.cex_snapshot.id == selected[0].snapshot_id
+            assert first_cycle.cex_snapshot.kucoin_book.ask_quantity == 250
+            assert first_cycle.cex_snapshot.kucoin_book.symbol == "HBAR-USDT"
+            assert first_cycle.cex_snapshot.kucoin_book.transport == "websocket"
+
+            market.now += timedelta(seconds=1)
+            api.now = market.now
+            market.block += 1
+            api.depth["time"] += 1000
+            update = frame(api)
+            update["data"]["asks"][0][1] = "300"
+            socket.messages.put_nowait(update)
+            await socket.reading(6)
+            second_cycle = await worker.analyze()
+            assert second_cycle.cex_snapshot.id != first_cycle.cex_snapshot.id
+            assert second_cycle.cex_snapshot.kucoin_book.ask_quantity == 300
+            assert selected[0].asks[0].quantity == 250
+            assert selected[0].received_at != selected[1].received_at
+            assert cex.depth_stream.last_valid_received_at == selected[1].received_at
+            assert order == ["dex:start", "dex:done", "kucoin:select", "market:evaluate"] * 2
+            assert api.connects == 1 and api.rest_reads == 0 and not socket.closed
+        assert socket.closed
+
+    asyncio.run(exercise())
+
+
+def test_malformed_depth_does_not_refresh_or_mutate_last_valid_book():
+    async def exercise():
+        socket = DepthSocket()
+        api = DepthExchange(socket)
+        cex = KuCoin(api)
+        socket.messages.put_nowait(frame(api))
+        async with running(cex):
+            await socket.reading(4)
+            original = await cex.snapshot()
+            api.now += timedelta(seconds=1)
+            api.depth["time"] += 1000
+            malformed = frame(api)
+            malformed["data"]["bids"][0][1] = "0"
+            socket.messages.put_nowait(malformed)
+            await socket.reading(5)
+            assert await cex.snapshot() is original
+            assert cex.depth_stream.last_valid_received_at == original.received_at
+            assert api.connects == 1 and api.rest_reads == 0
+
+            api.now += timedelta(seconds=10)
+            api.depth["time"] += 10_000
+            assert (await cex.snapshot()).source == "rest"
+            assert cex.depth_stream.last_valid_received_at == original.received_at
+
+    asyncio.run(exercise())

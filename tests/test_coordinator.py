@@ -409,7 +409,7 @@ def test_market_reads_are_sequential_dex_before_kucoin(setup, monkeypatch):
 @pytest.mark.parametrize("seconds", [0, 2, 5, 9, 10, 10.000001])
 def test_cross_venue_timestamp_boundaries(setup, field, seconds):
     _, market, coordinator = setup
-    pool, book = asyncio.run(coordinator._read())
+    pool, book, _ = asyncio.run(coordinator._read())
     # A fresh receipt cannot differ by more than ten seconds. For source
     # timestamps an otherwise valid source-ahead value can cross the boundary.
     later = market.now + timedelta(microseconds=1) if field == "source_at" and seconds > 10 else market.now

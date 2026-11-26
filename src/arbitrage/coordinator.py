@@ -10,14 +10,14 @@ from fractions import Fraction
 from uuid import uuid4
 
 from .config import Simulation
-from .kucoin import Book, InsufficientDepth, KuCoin, priced_units, validate_book
+from .kucoin import SYMBOL, Book, InsufficientDepth, KuCoin, priced_units, validate_book
 from .market_data import (
     MAX_AGE, MAX_SKEW, TRADE_UNITS, MarketDataError, PublicConnections, StaleSnapshot, Unavailable,
     require_fresh, utc_now,
 )
 from .models import (
     MAX_UNITS, AnalysisCycle, Asset, Direction, Evaluation, EvaluationStatus,
-    Holding, MarketQuote, Reason, Side, SnapshotObservation, Venue, Worker, WorkerState,
+    Holding, KuCoinBookObservation, MarketQuote, Reason, Side, SnapshotObservation, Venue, Worker, WorkerState,
     normalize_time,
 )
 from .saucerswap import (
@@ -113,7 +113,7 @@ class OpportunityCoordinator:
 
     @staticmethod
     def _observations(
-        pool: PoolSnapshot, book: Book,
+        pool: PoolSnapshot, book: Book, dex_completed: datetime,
     ) -> tuple[SnapshotObservation, SnapshotObservation]:
         if (
             type(pool.block) is not int or pool.block <= 0
@@ -125,9 +125,15 @@ class OpportunityCoordinator:
         try:
             return (
                 SnapshotObservation(id=f"{NETWORK}:{pool.block}:{pool.block_hash}",
-                                    source_at=pool.source_at, received_at=pool.received_at),
+                                    source_at=pool.source_at, received_at=pool.received_at,
+                                    completed_at=dex_completed),
                 SnapshotObservation(id=book.snapshot_id,
-                                    source_at=book.source_at, received_at=book.received_at),
+                                    source_at=book.source_at, received_at=book.received_at,
+                                    kucoin_book=KuCoinBookObservation(
+                                        symbol=SYMBOL, transport=book.source,
+                                        bid_price=book.bids[0].price, bid_quantity=book.bids[0].quantity,
+                                        ask_price=book.asks[0].price, ask_quantity=book.asks[0].quantity,
+                                    ) if book.bids and book.asks else None),
             )
         except ValueError:
             raise InvalidCycle(Reason.STALE_OR_INVALID_CLOCK) from None
@@ -164,13 +170,14 @@ class OpportunityCoordinator:
         gross = priced_units(book.asks, Side.BUY, Fraction(0))
         return Market(pool, book, dex, cex, quotes, gross)
 
-    async def _read(self) -> tuple[PoolSnapshot, Book]:
+    async def _read(self) -> tuple[PoolSnapshot, Book, datetime]:
         # Owner-approved sequential sampling: DEX first, then KuCoin.
         # Keep one bounded deadline for the complete two-venue read.
         async with asyncio.timeout(READ_DEADLINE):
             pool = await self.dex.snapshot()
+            dex_completed = self._now()
             book = await self.cex.snapshot()
-        return pool, book
+        return pool, book, dex_completed
 
     @staticmethod
     def _failure(error: Exception) -> Reason:
@@ -382,8 +389,8 @@ class OpportunityCoordinator:
             market, reason = None, None
             observations = (None, None)
             try:
-                pool, book = await self._read()
-                observations = self._observations(pool, book)
+                pool, book, dex_completed = await self._read()
+                observations = self._observations(pool, book, dex_completed)
                 market = self._market(pool, book, observations, self._now())
             except (InvalidCycle, MarketDataError, TimeoutError, ExceptionGroup) as error:
                 reason = self._failure(error)

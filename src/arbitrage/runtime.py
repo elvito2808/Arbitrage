@@ -264,7 +264,9 @@ class Runtime:
         with self.storage.transaction() as tx:
             row = tx._db.execute("SELECT payload FROM runtime_health WHERE id=1").fetchone()
             previous = json.loads(row["payload"]) if row else {}
+            last_ws_update = engine.cex.depth_stream.last_valid_received_at
             health = {
+                "ws_last_valid_received_at": last_ws_update.isoformat() if last_ws_update else None,
                 "observed_at": now.isoformat(),
                 "ws": engine.cex.depth_stream.health,
                 "kucoin_source": engine.cex.source,
