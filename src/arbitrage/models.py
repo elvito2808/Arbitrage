@@ -1,0 +1,194 @@
+"""Immutable records shared by the simulator's persistence and interfaces."""
+
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from enum import StrEnum
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+
+
+MAX_UNITS = 2**63 - 1
+EXPERIMENT_DURATION = timedelta(hours=24)
+WORKER_CAPACITY = 3
+TRADE_HBAR = 1_000
+
+Units = Annotated[int, Field(strict=True, ge=0, le=MAX_UNITS)]
+PositiveUnits = Annotated[int, Field(strict=True, gt=0, le=MAX_UNITS)]
+Identifier = Annotated[str, Field(strict=True, min_length=1, max_length=128)]
+
+
+def reject_inexact(value: object) -> object:
+    if type(value) not in (Decimal, str, int):
+        raise ValueError("use a decimal string, Decimal, or integer")
+    return value
+
+
+def normalize_time(value: datetime) -> datetime:
+    if value.utcoffset() is None:
+        raise ValueError("timestamps must include a UTC offset")
+    return value.astimezone(UTC)
+
+
+Exact = Annotated[Decimal, BeforeValidator(reject_inexact)]
+Timestamp = Annotated[datetime, AfterValidator(normalize_time)]
+
+
+class Record(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False, hide_input_in_errors=True)
+
+
+class Venue(StrEnum):
+    DEX = "dex"
+    CEX = "cex"
+
+
+class Asset(StrEnum):
+    HBAR = "HBAR"
+    WHBAR = "WHBAR"
+    USDC = "USDC"
+    USDT = "USDT"
+
+    @property
+    def decimals(self) -> int:
+        return 8 if self in (Asset.HBAR, Asset.WHBAR) else 6
+
+
+class Holding(StrEnum):
+    DEX_WHBAR = "dex.WHBAR"
+    DEX_USDC = "dex.USDC"
+    DEX_HBAR = "dex.HBAR"
+    CEX_HBAR = "cex.HBAR"
+    CEX_USDT = "cex.USDT"
+
+    @property
+    def asset(self) -> Asset:
+        return Asset(self.value.split(".")[1])
+
+
+class Side(StrEnum):
+    BUY = "buy"
+    SELL = "sell"
+
+
+class Direction(StrEnum):
+    BUY_DEX = "buy_dex"
+    SELL_DEX = "sell_dex"
+
+
+class Outcome(StrEnum):
+    PENDING = "pending"
+    FILLED = "filled"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class WorkerState(StrEnum):
+    STOPPED = "stopped"
+    RUNNING = "running"
+    PAUSED = "paused"
+
+
+class MarketQuote(Record):
+    venue: Venue
+    side: Side
+    base_asset: Asset
+    quote_asset: Asset
+    base_units: PositiveUnits
+    quote_units: PositiveUnits
+    snapshot_id: Identifier
+    observed_at: Timestamp
+
+    @model_validator(mode="after")
+    def validate_market(self) -> "MarketQuote":
+        expected = (Asset.WHBAR, Asset.USDC) if self.venue == Venue.DEX else (Asset.HBAR, Asset.USDT)
+        if (self.base_asset, self.quote_asset) != expected:
+            raise ValueError("assets must match the configured venue")
+        return self
+
+
+class Opportunity(Record):
+    id: Identifier
+    worker_id: Identifier
+    direction: Direction
+    requested_dex: MarketQuote
+    requested_cex: MarketQuote
+    estimated_profit_usdt: Exact
+    observed_at: Timestamp
+    rejection_reason: Identifier | None = None
+
+    @model_validator(mode="after")
+    def validate_legs(self) -> "Opportunity":
+        dex_side = Side.BUY if self.direction == Direction.BUY_DEX else Side.SELL
+        cex_side = Side.SELL if dex_side == Side.BUY else Side.BUY
+        if (self.requested_dex.venue, self.requested_dex.side) != (Venue.DEX, dex_side):
+            raise ValueError("DEX quote does not match direction")
+        if (self.requested_cex.venue, self.requested_cex.side) != (Venue.CEX, cex_side):
+            raise ValueError("CEX quote does not match direction")
+        if any(quote.base_units != TRADE_HBAR * 10**Asset.HBAR.decimals
+               for quote in (self.requested_dex, self.requested_cex)):
+            raise ValueError("both requested quotes must cover exactly 1,000 HBAR")
+        return self
+
+
+class Execution(Record):
+    id: Identifier
+    opportunity_id: Identifier
+    outcome: Outcome
+    observed_at: Timestamp
+    dex_fill: MarketQuote | None = None
+    cex_fill: MarketQuote | None = None
+
+    @model_validator(mode="after")
+    def validate_fill_venues(self) -> "Execution":
+        if self.dex_fill and self.dex_fill.venue != Venue.DEX:
+            raise ValueError("DEX fill must belong to the DEX venue")
+        if self.cex_fill and self.cex_fill.venue != Venue.CEX:
+            raise ValueError("CEX fill must belong to the CEX venue")
+        return self
+
+
+class Balance(Record):
+    holding: Holding
+    total_units: Units
+    reserved_units: Units = 0
+
+    @model_validator(mode="after")
+    def validate_reservation(self) -> "Balance":
+        if self.reserved_units > self.total_units:
+            raise ValueError("reserved units exceed total units")
+        return self
+
+    @property
+    def available_units(self) -> int:
+        return self.total_units - self.reserved_units
+
+
+class Reservation(Record):
+    id: Identifier
+    holding: Holding
+    units: PositiveUnits
+
+
+class LedgerEntry(Record):
+    id: Identifier
+    holding: Holding
+    delta_units: Annotated[int, Field(strict=True, ge=-MAX_UNITS, le=MAX_UNITS)]
+    recorded_at: Timestamp
+
+
+class Worker(Record):
+    id: Identifier
+    state: WorkerState
+
+
+class Experiment(Record):
+    id: Identifier
+    started_at: Timestamp
+    deadline_at: Timestamp
+
+    @model_validator(mode="after")
+    def validate_duration(self) -> "Experiment":
+        if self.deadline_at - self.started_at != EXPERIMENT_DURATION:
+            raise ValueError("deadline must be 24 hours after the start")
+        return self
