@@ -312,6 +312,9 @@ class Runtime:
             engine.gate = lambda tx, worker, now: (
                 Reason.WORKER_INACTIVE if shutdown.is_set() else self.gate(tx, worker, now)
             )
+            if not self.tick(worker_id):
+                await self._drain_expired(engine, public, shutdown)
+                return
             engine.recovery_gate = lambda tx: self._recovery_allowed(tx, shutdown)
             self.log.emit(Event.WORKER_STATE, worker=worker_id)
             watch = asyncio.create_task(self._watch(worker_id, shutdown))
@@ -331,12 +334,15 @@ class Runtime:
                             self._transition(tx, row, "stopped", self.now())
                 self.log.emit(Event.WORKER_STATE, worker=worker_id)
                 self._health(public, engine)
-            with self.storage.transaction() as tx:
-                drain = self._recovery_allowed(tx, shutdown, expired=True)
-            if drain:
-                engine.recovery_gate = lambda tx: self._recovery_allowed(tx, shutdown, expired=True)
-                await engine.recover()
-                self._health(public, engine)
+            await self._drain_expired(engine, public, shutdown)
+
+    async def _drain_expired(self, engine, public, shutdown):
+        with self.storage.transaction() as tx:
+            drain = self._recovery_allowed(tx, shutdown, expired=True)
+        if drain:
+            engine.recovery_gate = lambda tx: self._recovery_allowed(tx, shutdown, expired=True)
+            await engine.recover()
+            self._health(public, engine)
 
 
 async def foreground(runtime, worker_id, config):
