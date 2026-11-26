@@ -1,0 +1,57 @@
+P06 specialist verification, 2026-11-26 UTC
+Framework A read-only pin: cb23c4b08d2103aead243b59d6b66f325361a4bc
+B dispatch/main: c269d9a7ab97e532874bf39d47471363814a8270
+Implementation/test commit: 8e070e1902606e370da2764dc54c08e94e23dd05
+
+Commands and sanitized results
+- git ls-remote origin refs/heads/main refs/heads/agent-1/arb-040-046: exit 0.
+  main matched dispatch and publication branch did not exist before push.
+- git status --short --branch on isolated B checkout: exit 0, clean work.
+- git show <A-pin>:VERSION: exit 0, 1.0.0. Framework A working tree clean.
+- gh api repos/elvito2808/Arbitrage/collaborators/elvito2808/permission:
+  exit 0, permission=admin. GitHub connector also reported pull and push.
+- python3.12 -m venv <clean-venv>: exit 0, Python 3.12.14.
+- <clean-venv>/bin/python -m pip install '.[test]': exit 0.
+- <clean-venv>/bin/python -m pip check: exit 0, no broken requirements.
+- <clean-venv>/bin/python -I <installed-import-check> from outside B:
+  exit 0, arbitrage and 13 installed submodules and openpyxl 3.1.5.
+- <clean-venv>/bin/python -m pytest -q: exit 0, 133 passed, 3 skipped.
+  116 inherited passing tests and 17 P06 tests. Public smoke checks skipped:
+  Hedera REST, KuCoin REST and KuCoin WS. They require explicit opt-in.
+- Installed arbitrage --data-dir <private-temp> init --config <approved-toml>,
+  status, report, emergency-stop, recover and status: exit 0 each, no
+  foreground worker or market cycles. Three stopped workers and persistent
+  emergency latch verified. Runtime directory 0700, SQLite, config, lock and
+  report 0600. openpyxl reopened 15 sheets with five opening balance rows
+  and initial validated configuration. No workbook or runtime data committed.
+- tests/test_operations.py verifies both directions, exact fees and amounts,
+  partial fill, stale, duplicate, unavailable, insufficient balance, decimal
+  and integer precision, reconciliation, workbook formula safety, and failed
+  replacement. Replayed P03 data exercised the real SaucerSwap and KuCoin
+  adapters and the production engine with zero trades, reservations, ledger
+  postings and balance mutations. Time and lifecycle tests use controlled
+  clocks and cancellation. Systemd template verification was static.
+- git diff --cached --check and git diff <B-baseline>..HEAD --check: exit 0.
+  Authorized path allowlist and credential-pattern scan of added lines
+  passed. Runtime artifact filename check passed.
+
+Failure-attempt ledger
+- ARB-046 Excel completeness and write path, attempt 1: full installed
+  suite exit 1, 131 passed, 1 failed, 3 skipped. Export attempted to
+  dereference a missing observation snapshot. Classified as a code defect.
+- ARB-046 attempt 2: guarded missing snapshots while preserving venue
+  column alignment and joined outcomes. Full clean installed suite exit 0,
+  132 passed, 3 skipped. Additional emergency journal regression and final
+  release verification: full clean installed suite exit 0, 133 passed,
+  3 skipped. No additional repair for the failed Excel acceptance group.
+- No other failed acceptance groups observed. Fresh final environment
+  reran installation, imports, dependency and CLI checks successfully.
+
+Skipped or unverified
+- Optional external smoke checks were skipped for P06. There were no
+  operating public-network sessions, live trades, real 24-hour runs,
+  systemd installation/activation, or owner-local execution.
+- Verified route gas, live WS, 24-hour provider continuity, physical power
+  loss, production host behavior and independently durable backup are
+  unverified. The owner deferred independent backup. Settling historical
+  fixture trades remains outside the public runtime.

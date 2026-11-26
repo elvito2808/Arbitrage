@@ -91,6 +91,7 @@ class SaucerSwap:
         if not timedelta(0) < cache_age <= MAX_AGE:
             raise ValueError("cache age must be positive and at most 10 seconds")
         self.public = public
+        self.cache_hits = 0
         self.cache_age = cache_age
         self._cached: PoolSnapshot | None = None
         self._lock = asyncio.Lock()
@@ -221,6 +222,7 @@ class SaucerSwap:
                     except MarketDataError:
                         self._cached = None
                         raise
+                    self.cache_hits += 1
                     return self._cached
                 self._cached = None
                 if isinstance(exc, ExceptionGroup):

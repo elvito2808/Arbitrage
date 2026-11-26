@@ -12,7 +12,7 @@ from uuid import uuid4
 from .config import Simulation
 from .kucoin import SYMBOL, Book, InsufficientDepth, KuCoin, priced_units, validate_book
 from .market_data import (
-    MAX_AGE, MAX_SKEW, TRADE_UNITS, MarketDataError, PublicConnections, Unavailable,
+    MAX_AGE, MAX_SKEW, TRADE_UNITS, MarketDataError, PublicConnections, StaleSnapshot, Unavailable,
     require_fresh, utc_now,
 )
 from .models import (
@@ -61,11 +61,13 @@ class OpportunityCoordinator:
     def __init__(
         self, storage: Storage, settings: Simulation, dex: SaucerSwap, cex: KuCoin,
         *, clock: Callable[[], datetime] = utc_now,
+        gate: Callable[[Transaction, str, datetime], Reason | None] | None = None,
     ):
         self.storage = storage
         self.dex = dex
         self.cex = cex
         self.clock = clock
+        self.gate = gate
         self.age = min(MAX_AGE, timedelta(seconds=settings.cache_ttl_seconds))
         self.fee = Fraction(settings.cex_fee_fraction)
         self.profit_floor = max(Fraction("0.10"), Fraction(settings.minimum_profit_usdt))
@@ -172,6 +174,8 @@ class OpportunityCoordinator:
         for item in errors:
             if isinstance(item, InvalidCycle):
                 return item.reason
+            if isinstance(item, StaleSnapshot):
+                return Reason.STALE_OR_INVALID_CLOCK
             if isinstance(item, InsufficientDepth):
                 return Reason.INSUFFICIENT_DEPTH
             if not isinstance(item, (Unavailable, TimeoutError)):
@@ -298,6 +302,8 @@ class OpportunityCoordinator:
             reason = Reason.CYCLE_EXPIRED
         elif worker.state != WorkerState.RUNNING:
             reason = Reason.WORKER_INACTIVE
+        if self.gate:
+            reason = self.gate(tx, worker_id, now) or reason
         if reason is None and market is None:
             raise ValueError("analysis requires a market or a reason")
         if reason is None:
@@ -332,7 +338,9 @@ class OpportunityCoordinator:
         cycle_id = uuid4().hex
         with self.storage.transaction() as tx:
             now = self._now()
-            denied = tx.claim_analysis(NETWORK, cycle_id, worker_id, now, LEASE, MIN_INTERVAL)
+            denied = self.gate(tx, worker_id, now) if self.gate else None
+            if denied is None:
+                denied = tx.claim_analysis(NETWORK, cycle_id, worker_id, now, LEASE, MIN_INTERVAL)
             if denied:
                 result = self._miss(cycle_id, worker_id, now, denied)
                 tx.add_analysis(NETWORK, result)
@@ -351,6 +359,13 @@ class OpportunityCoordinator:
                 result = self._record(tx, cycle_id, worker_id, market, reason, observations)
             recorded = True
             return result
+        except asyncio.CancelledError:
+            if self.gate:
+                with self.storage.transaction() as tx:
+                    now = self._now()
+                    reason = self.gate(tx, worker_id, now) or Reason.CYCLE_INTERRUPTED
+                    tx.add_analysis(NETWORK, self._miss(cycle_id, worker_id, now, reason))
+            raise
         finally:
             if not recorded:
                 with self.storage.transaction() as tx:

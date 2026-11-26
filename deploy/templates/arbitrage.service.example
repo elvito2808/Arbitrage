@@ -1,0 +1,28 @@
+# NOT DEPLOYED. Separate owner approval required.
+# Requires an existing dedicated unprivileged arbitrage account and a private initialized state directory.
+[Unit]
+Description=Arbitrage public analysis (reattach to existing running session)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=arbitrage
+Group=arbitrage
+StateDirectory=arbitrage
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/arbitrage
+UMask=0077
+ExecStart=/opt/arbitrage/venv/bin/arbitrage --data-dir /var/lib/arbitrage recover
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal

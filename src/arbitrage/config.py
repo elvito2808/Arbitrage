@@ -83,9 +83,12 @@ class Config(Record):
 
 
 def load_config(path: str | Path) -> Config:
+    return parse_config(Path(path).read_bytes())
+
+
+def parse_config(content: bytes) -> Config:
     try:
-        with Path(path).open("rb") as stream:
-            return Config.model_validate(tomllib.load(stream, parse_float=Decimal))
+        return Config.model_validate(tomllib.loads(content.decode("utf-8"), parse_float=Decimal))
     except (tomllib.TOMLDecodeError, UnicodeError, ValidationError):
         # Invalid values and unknown keys may contain sensitive input.
         raise ValueError("invalid simulation configuration") from None

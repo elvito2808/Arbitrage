@@ -168,6 +168,7 @@ class KuCoin:
         if not timedelta(0) < cache_age <= MAX_AGE:
             raise ValueError("cache age must be positive and at most 10 seconds")
         self.public = public
+        self.cache_hits = 0
         self.fee = Fraction(fee)
         self.cache_age = cache_age
         self._increments: tuple[Fraction, Fraction] | None = None
@@ -187,6 +188,7 @@ class KuCoin:
     async def snapshot(self) -> Book:
         async with self._lock:
             generation = self._generation
+            from_cache = False
             try:
                 async with asyncio.timeout(9):
                     if self._increments is None:
@@ -213,6 +215,7 @@ class KuCoin:
                 if self._book is None:
                     raise Unavailable("KuCoin depth unavailable") from None
                 book = self._book
+                from_cache = True
             except MarketDataError:
                 self._invalidate()
                 raise
@@ -224,6 +227,7 @@ class KuCoin:
                 self._invalidate()
                 raise
             self._book = book
+            self.cache_hits += int(from_cache)
             return book
 
     def price(self, book: Book, side: Side) -> MarketQuote:

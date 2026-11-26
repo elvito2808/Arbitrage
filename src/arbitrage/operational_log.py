@@ -1,12 +1,14 @@
 """Bounded in-memory structured logging with a closed output schema."""
 
 import json
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from queue import Empty, Full, Queue
 
 
 class Event(StrEnum):
+    ANALYSIS = "analysis"
     WORKER_STATE = "worker_state"
     CONNECTION_STATUS = "connection_status"
     STORAGE_STATUS = "storage_status"
@@ -25,18 +27,24 @@ class OperationalLog:
     def __init__(self, capacity: int = 256):
         if type(capacity) is not int or not 1 <= capacity <= 4096:
             raise ValueError("log capacity must be between 1 and 4096")
+        self.dropped = 0
         self._buffer: Queue[str] = Queue(maxsize=capacity)
 
     def emit(self, event: object, level: object = Level.INFO, **details: object) -> bool:
         # Free-form text, exception messages and metadata never reach the sink.
         if type(event) is not Event or type(level) is not Level:
             return False
-        line = json.dumps(
-            {"at": datetime.now(UTC).isoformat(), "event": event.value, "level": level.value}
-        )
+        record = {"at": datetime.now(UTC).isoformat(), "event": event.value, "level": level.value}
+        worker, cycle = details.get("worker"), details.get("cycle")
+        if type(worker) is str and worker in ("worker-1", "worker-2", "worker-3"):
+            record["worker"] = worker
+        if type(cycle) is str and re.fullmatch(r"[a-f0-9]{32}", cycle):
+            record["cycle"] = cycle
+        line = json.dumps(record)
         try:
             self._buffer.put_nowait(line)
         except Full:
+            self.dropped += 1
             return False
         return True
 

@@ -27,6 +27,10 @@ class MarketDataError(ValueError):
     """Invalid, inconsistent or stale public data."""
 
 
+class StaleSnapshot(MarketDataError):
+    """Snapshot time exceeds the freshness or clock skew limit."""
+
+
 class Unavailable(MarketDataError):
     """Transient public provider failure."""
 
@@ -44,7 +48,7 @@ def require_fresh(
         or now - received_at > age
         or now - source_at > age
     ):
-        raise MarketDataError("market snapshot is stale or outside clock skew tolerance")
+        raise StaleSnapshot("market snapshot is stale or outside clock skew tolerance")
 
 
 def retry_delay(headers: Any, now: datetime) -> float:
@@ -81,6 +85,8 @@ class PublicConnections:
         self.jitter = jitter
         self.timer = timer
         self.health: dict[str, str] = {}
+        self.before_request: Callable[[], None] | None = None
+        self.retries = 0
         self._ids = count(1)
         self._rate_limit_until: dict[str, float] = {}
 
@@ -92,6 +98,9 @@ class PublicConnections:
                     wait = self._rate_limit_until.get(source, 0) - self.timer()
                     if wait > 0:
                         await self.sleep(wait)
+                    if self.before_request:
+                        self.before_request()
+                    self.retries += int(attempt > 0)
                     delay = self.jitter(0.15, 0.25) * 2**attempt
                     try:
                         async with asyncio.timeout(2.5):

@@ -205,6 +205,8 @@ class EvaluationStatus(StrEnum):
 class Reason(StrEnum):
     WORKER_INACTIVE = "worker_inactive"
     CYCLE_BUSY = "cycle_busy"
+    SESSION_DEADLINE = "session_deadline"
+    CYCLE_INTERRUPTED = "cycle_interrupted"
     CYCLE_EXPIRED = "cycle_expired"
     NETWORK_QUOTA = "network_quota"
     MARKET_UNAVAILABLE = "market_unavailable"
