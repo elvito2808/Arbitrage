@@ -34,6 +34,7 @@ class Hedera:
         self.router_down = False
         self.router_wrong = False
         self.mirror_hash = HASH
+        self.rpc_hash = HASH
 
     def clock(self):
         return self.now
@@ -49,7 +50,7 @@ class Hedera:
         if method == "eth_chainId":
             return self.chain
         if method == "eth_getBlockByNumber":
-            return {"number": hex(BLOCK), "hash": HASH, "timestamp": hex(int(POOL_TIME.timestamp()))}
+            return {"number": hex(BLOCK), "hash": self.rpc_hash, "timestamp": hex(int(POOL_TIME.timestamp()))}
         if method == "eth_gasPrice":
             if self.gas_down:
                 raise Unavailable("fixture gas unavailable")
@@ -109,6 +110,7 @@ def test_historical_dex_integer_router_and_gas():
 @pytest.mark.parametrize(("field", "value", "match"), [
     ("reverse", True, "token ordering"),
     ("chain", "0x128", "chain ID"),
+    ("rpc_hash", "0x" + "gg" * 32, "invalid Hedera RPC block"),
     ("mirror_hash", "0x" + "ef" * 32, "provenance"),
     ("router_wrong", True, "router"),
     ("now", POOL_TIME + timedelta(seconds=11), "stale"),
