@@ -1,0 +1,49 @@
+Fresh independent P07 retest, 2026-11-26 UTC
+Dispatch https://github.com/elvito2808/Arbitrage/issues/16#issuecomment-7182461015
+
+From the Project B repository:
+git ls-remote origin refs/heads/main 'refs/pull/1[578]/head'
+git fetch -q origin refs/pull/15/head:refs/qa-retest/pr15 refs/pull/17/head:refs/qa-retest/pr17 refs/pull/18/head:refs/qa-retest/pr18
+git rev-parse refs/qa-retest/pr15 refs/qa-retest/pr17 refs/qa-retest/pr18
+git worktree add --detach ../independent-retest/checkout fcc0e53ab777edcdf290bedfc7916413a11b48ef
+Exit 0 for each. Remote main and all three PR heads matched the assignment.
+
+From the disposable checkout:
+git -c user.name='Agent 3' -c user.email='agent-3@users.noreply.github.com' cherry-pick a4fcc5a8b9f32ca0c67b286b3e93836dadc3c71c f7fab71523a02fc84387649fab25528372ee5c84 f99f885e7c3a0c37ba38ec35cd59824a383d4d62
+git diff --exit-code fcc0e53 -- tests/qa project/reports/ARB-047-055.md project/evidence/ARB-047-055
+git diff --check 0b06c49 HEAD
+git rev-parse HEAD HEAD^{tree} HEAD:tests/qa fcc0e53:tests/qa
+Exit 0 for each. No application conflicts, QA diffs or whitespace errors.
+Combined commit 3000361165cd2ad401f6b4148d4426bcb5ee02de
+Combined tree 3c2a753303eac7ba382890681cc533d60269eeda
+Both QA tree IDs 2e9791bc16fe41fedb1b78d6859c70bbf0611f17
+
+python3.12 -VV
+python3.12 -m venv ../venv
+../venv/bin/python -m pip install --disable-pip-version-check '.[test]' > ../install.log
+../venv/bin/python -m pip check
+Exit 0 for each. No broken requirements found.
+Linux, Python 3.12.14, SQLite 3.53.1, arbitrage-simulation 0.1.0,
+pytest 9.2.0, aiohttp 3.14.5, pydantic 2.14.4, openpyxl 3.1.5.
+Wheel SHA-256 e582aec0ed208405e80127e993f86638e8cfd9c0c4930c7948ef2fda166f4d30.
+An installed-source comparison matched all 14 modules byte for byte.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest -q tests/test_market_data.py tests/test_storage.py tests/test_simulation.py tests/qa/test_p07_integration.py tests/qa/test_p07_storage.py -k 'kucoin or ledger or migration or recorded_shapes or normal_public_engine'
+Exit 0. 37 passed, 47 deselected in 0.49s.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest -q tests/qa
+Exit 0. 46 passed in 2.79s.
+
+env -u ARB_PUBLIC_SMOKE ../venv/bin/python -m pytest -q -rs
+Exit 0. 204 passed, 3 skipped in 4.09s.
+SKIPPED [3] tests/test_market_smoke.py:19: public network smoke is opt-in
+
+git diff --check 0b06c49 HEAD
+git diff --exit-code fcc0e53 -- tests/qa
+git status --short
+Exit 0 for each. No whitespace diagnostics, QA diff or working tree changes.
+
+Production-shaped replay asserted market_candidate / gas_unknown for both
+buy_dex and sell_dex. Simulated trades, simulation events, reservations,
+ledger rows and executions were zero. All opening balances matched closing
+balances and the workbook had zero reconciliation discrepancies.
