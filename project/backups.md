@@ -9,3 +9,7 @@ P01 evidence merge commit: `b4ed121aac1249352dccf4a5d4353765e66dfee5`; A pin `cb
 Required next: independent owner-controlled copy of both repositories and needed artifacts, in separate failure domain, checksum manifest, isolated restore, checked commit/tree and recorded result. Procedure: `project/backup-instructions.md`. Do not store binaries, sensitive paths, secrets or private files in this public repo. Agent 0 records sanitized backup location reference and verification after owner returns results.
 
 **Until then P02 implementation changes remain gated.** Project branches/PRs alone are not independent backups.
+
+
+## Owner decision — 2026-11-26
+Owner explicitly requests proceeding without local execution or personal-system backup at this stage. Durable independent backup is deferred, not VERIFIED. This supersedes the P02 backup gate in prior records; retain recovery risk and temporary restore evidence. No change to A, no live trading, no deployment or added cost. P02 may proceed in Codex Cloud. Owner instruction: «من فعلا نیازی به نسخه پشتیبانی روی سیستم خودم ندارم. پروژه بدون اینکه لازم باشد نسخه ای را روی سیستم خودم اجرا کنم، جلو ببر.»
