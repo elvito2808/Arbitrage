@@ -1,5 +1,7 @@
 # P07 owner-approved sequential reads validation
 
+The owner subsequently approved persistent background WebSocket operation with DEX-first selection in each cycle. See the [Option A validation](P07_PERSISTENT_WS_SEQUENTIAL_CYCLE_VALIDATION.md) for the current scope and disposition.
+
 ## A. Executive summary
 
 **Recommendation: PARTIAL.** The coordinator's DEX-first snapshot calls, 10-second cross-venue tolerance, existing individual timestamp controls, and shared request deadline passed deterministic tests. Four bounded public cycles exercised this sequence. One cycle obtained independently verified gas estimates and executable quotes in both directions. Its existing maximum-loss check rejected both directions. The other three cycles rejected gas evidence when the Hedera head moved.
