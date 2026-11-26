@@ -25,8 +25,9 @@ Use `OperationalLog.emit()` with its event and level enums. Caller metadata is d
 Use a caller-owned `aiohttp.ClientSession` and pass it to
 `arbitrage.market_data.PublicConnections`. Reuse the session for Hedera JSON-RPC,
 the Hedera mirror node, and KuCoin REST and WebSocket. Enable `trust_env=True` when
-the runner provides an outbound proxy. The caller owns the optional
-`KuCoin.stream.run()` task and cancels and awaits it before closing the session.
+the runner provides an outbound proxy. The foreground runtime owns
+`KuCoin.depth_stream.run()` and cancels and awaits it before closing the
+session. A caller using the adapter outside the runtime owns that task.
 
 - Use `await SaucerSwap(public).snapshot()` for both directions from the same
   block. The result includes both requested quotes, token reserves in smallest
@@ -42,13 +43,13 @@ the runner provides an outbound proxy. The caller owns the optional
   USDT, with buy costs rounded up and sell proceeds rounded down after the
   assumed quote-currency fee. The venue's quote increment describes its
   order interface. These totals are for simulation requests.
-- `await cex.indicative_ticker()` and the optional WS stream expose best bid,
-  ask and sizes with trade and receive times. Pricing always uses timestamped
-  depth-20. The ticker clock describes the last trade and can lag behind book
-  changes. The WS queue keeps one latest event and is cleared on reconnect.
-  Reconnect obtains a new public bootstrap token, subscribes again and
-  invalidates earlier depth snapshots. Keep WS URLs and bootstrap data out of
-  logs.
+- The public depth-5 WebSocket is the primary pricing feed. It supplies
+  timestamped bids, asks and executable quantities in the same book model as
+  the depth-20 REST fallback. Both use validated HBAR-USDT metadata and exact
+  increments. An unavailable, silent, stale or invalid stream falls back to
+  REST. A recovering connection needs two consecutive fresh, advancing books.
+  A book with insufficient visible quantity is rejected by pricing.
+  Keep WS URLs and bootstrap data out of logs.
 
 HTTP uses at most three attempts per read, 2.5 seconds per attempt and eight
 seconds overall, including backoff. Retry uses exponential jitter and observes
@@ -57,18 +58,24 @@ fails closed. Pool and depth reads each have a nine-second overall deadline.
 Connection failures can reuse a prior snapshot only within its original
 freshness deadline. Both source and receipt age are capped at ten seconds, with
 two seconds of allowed source-ahead skew. An invalid response drops the cache.
-The WS has five-second connection and subscription deadlines, provider-supplied
-heartbeat limits, and three connection attempts per run. The caller can start a
-new run after a surfaced failure.
+WebSocket connection, subscription, liveness and depth freshness have bounded
+timeouts. Reconnection uses bounded backoff while REST remains available.
 
-Gas comes separately for each direction in weibars per gas. The observed price
-and its 2× cap define the scenario range. The P01 single 244,829-gas historical
-swap is an illustrative proxy for each direction. Execution gas remains unknown
-and the adapter marks cost validity false. P01's 34,133-gas view estimate only
-measures the quote read. Divide wei-denominated HBAR exposure by 10¹⁸, then
-multiply by an independently fresh HBAR/USDT price to model the gas exposure.
-Any USDC conversion uses the approved 1:1 simulation parity assumption.
-The adapter does not combine prices across venues.
+Gas uses independent exact-output BUY and exact-input SELL requests to the
+router. Set `simulation.hedera_estimate_sender` to a public EVM address
+whose existing read-only context permits the quoted swap simulation. The
+configured Hashio relay estimates on latest state, so an intervening head
+change invalidates an estimate. The adapter records the route request,
+chain, block, provider, gas units, price and timestamps. Gas pricing uses
+weibars per gas and rounds cost up to tinybars. The observed gas price and
+its 2× cap define the scenario range.
+
+The owner’s historical calibration is 143,161 gas at 1,590 gWei per gas,
+or 0.22762599 HBAR, for the native-input WHBAR→USDC transaction. That
+measurement is recorded separately from estimates for the current two
+ERC-20 routes. The estimated execution-gas component may differ from a
+future network charge. The coordinator values it from the same fresh,
+fee-free HBAR-USDT depth using the approved simulation parity assumption.
 
 Run `python -m pytest` for offline verification. The separately opted-in
 `ARB_PUBLIC_SMOKE=1 python -m pytest -s tests/test_market_smoke.py` bounds each
@@ -88,7 +95,7 @@ config.simulation, public)` and share it across workers. Obtain a worker with
 Worker state persists. The caller owns the HTTP session, and worker state
 transitions reuse the existing connections.
 
-Each cycle reads one SaucerSwap pool and one KuCoin REST depth snapshot
+Each cycle reads one SaucerSwap pool and one KuCoin depth snapshot
 concurrently with a ten-second read deadline. Both paths must be complete and
 within the configured age limit of at most ten seconds. Both source and
 receipt skew must be at most two seconds. The DB records both directions and
@@ -134,10 +141,10 @@ admit a simulation within the same SQLite transaction. Call
 and scheduling remain the caller's responsibility. Recovery leaves persisted
 worker state alone.
 
-The approved public adapters do not independently verify route execution gas.
-The engine records reason-coded analysis with zero execution admissions and
-zero reservations in that condition. A route-evidence object alone conveys no
-execution authority. The positive execution tests subclass the engine in
+The engine requires gas evidence bound to the exact public adapter snapshot
+for the requested route. When evidence is missing, expired or invalid, it
+records the reason and creates no admission or reservation. A route-evidence
+object alone conveys no execution authority. The positive execution tests subclass the engine in
 `tests/test_simulation.py`, authenticate fixture-specific provenance there,
 and use offline adapters and disposable databases. Normal configuration has
 no option to authorize fixture gas or recover a fixture execution.
