@@ -19,7 +19,7 @@ from arbitrage.models import (
     WorkerState,
 )
 from arbitrage.simulation import Attempt, Effect, Event, Scenario, SimulationEngine
-from arbitrage.storage import _ANALYSIS_SCHEMA, _SCHEMA, Storage, Transaction
+from arbitrage.storage import SCHEMA_VERSION, _ANALYSIS_SCHEMA, _SCHEMA, Storage, Transaction
 from test_coordinator import CONFIG, MarketFixture
 from test_market_data import Exchange, Hedera
 
@@ -474,12 +474,12 @@ def test_v2_migration_preserves_all_tables_and_rejects_newer_schema(offline, tmp
     legacy.initialize()
     legacy.initialize()
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (3,)
+        assert db.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
         assert {table: db.execute(f"SELECT * FROM {table}").fetchall() for table in tables} == before
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         assert db.execute("SELECT count(*) FROM simulated_trades").fetchone() == (0,)
-        db.execute("PRAGMA user_version = 4")
-    with pytest.raises(ValueError, match="unsupported SQLite schema version 4"):
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    with pytest.raises(ValueError, match=f"unsupported SQLite schema version {SCHEMA_VERSION + 1}"):
         legacy.initialize()
 
 

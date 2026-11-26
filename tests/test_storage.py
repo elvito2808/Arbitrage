@@ -120,3 +120,69 @@ def test_ledger_cannot_spend_reserved_units(store, now):
             tx.post(LedgerEntry(id="l", holding=HOLDING, delta_units=-41, recorded_at=now))
         assert tx.ledger() == ()
         assert tx.balance(HOLDING).available_units == 40
+
+
+@pytest.mark.parametrize("original_version", [0, 3])
+def test_posted_ledger_is_append_only_for_direct_writers(tmp_path, now, original_version):
+    from arbitrage.storage import _ANALYSIS_SCHEMA, _SCHEMA, _SIMULATION_SCHEMA
+
+    path = tmp_path / "ledger.sqlite3"
+    storage = Storage(path)
+    if original_version == 3:
+        with sqlite3.connect(path) as db:
+            db.execute("PRAGMA foreign_keys = ON")
+            for statement in _SCHEMA + _ANALYSIS_SCHEMA + _SIMULATION_SCHEMA:
+                db.execute(statement)
+            db.execute("PRAGMA user_version = 3")
+            db.execute("INSERT INTO balances VALUES (?, 95, 0)", (HOLDING,))
+            db.execute("INSERT INTO ledger VALUES (?, ?, -5, ?)", ("first", HOLDING, now.isoformat()))
+    storage.initialize()
+    first = LedgerEntry(id="first", holding=HOLDING, delta_units=-5, recorded_at=now)
+    with storage.transaction() as tx:
+        if original_version == 0:
+            tx.seed_balances((Balance(holding=HOLDING, total_units=100),))
+            tx.post(first)
+        assert tx.ledger() == (first,)
+        assert tx.balance(HOLDING).total_units == 95
+        tx.post(LedgerEntry(id="second", holding=HOLDING, delta_units=3, recorded_at=now))
+
+    statements = (
+        "UPDATE ledger SET delta_units=9 WHERE id='first'",
+        "DELETE FROM ledger WHERE id='first'",
+        "INSERT OR REPLACE INTO ledger VALUES ('first', 'dex.USDC', 9, 'changed')",
+        "REPLACE INTO ledger VALUES ('first', 'dex.USDC', 9, 'changed')",
+        "INSERT INTO ledger VALUES ('first', 'dex.USDC', 9, 'changed') "
+        "ON CONFLICT(id) DO UPDATE SET delta_units=excluded.delta_units",
+        "INSERT OR REPLACE INTO ledger(rowid,id,holding,delta_units,recorded_at) "
+        "SELECT rowid,'third',holding,9,'changed' FROM ledger WHERE id='first'",
+        "UPDATE OR REPLACE ledger SET id='first' WHERE id='second'",
+    )
+    for recursive_triggers in (0, 1):
+        with sqlite3.connect(path) as db:
+            db.execute(f"PRAGMA recursive_triggers = {recursive_triggers}")
+            for statement in statements:
+                with pytest.raises(sqlite3.IntegrityError, match="posted ledger is append-only"):
+                    db.execute(statement)
+
+    storage.initialize()
+    with storage.transaction() as tx:
+        deltas = tuple(entry.delta_units for entry in tx.ledger())
+        assert deltas == (-5, 3)
+        assert tx.balance(HOLDING).total_units == 100 + sum(deltas) == 98
+        assert tx._db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v3_ledger_migration_rolls_back_trigger_ddl_on_collision(tmp_path):
+    from arbitrage.storage import _ANALYSIS_SCHEMA, _SCHEMA, _SIMULATION_SCHEMA
+
+    path = tmp_path / "collision.sqlite3"
+    with sqlite3.connect(path) as db:
+        for statement in _SCHEMA + _ANALYSIS_SCHEMA + _SIMULATION_SCHEMA:
+            db.execute(statement)
+        db.execute("PRAGMA user_version = 3")
+        db.execute("CREATE TRIGGER keep_ledger_delete BEFORE DELETE ON ledger BEGIN SELECT 1; END")
+    with pytest.raises(sqlite3.OperationalError, match="already exists"):
+        Storage(path).initialize()
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone() == (3,)
+        assert db.execute("SELECT name FROM sqlite_schema WHERE name='keep_ledger_update'").fetchall() == []
