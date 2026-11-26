@@ -1,0 +1,2 @@
+# Status
+Roadmap approved; P00 in progress. Approval commit 0afd9cdbeb1762fd39770c16eea62ab7ff3ca5e3 verified via commit search. Governance records being initialized. Backup/restore and P01 feasibility pending. No implementation, deployment or live trading. Next: Agent 1 bounded initialization/feasibility assignment; Agent 0 verifies evidence before P02.
