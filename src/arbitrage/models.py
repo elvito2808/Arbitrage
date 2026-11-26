@@ -98,6 +98,7 @@ class MarketQuote(Record):
     quote_units: PositiveUnits
     snapshot_id: Identifier
     observed_at: Timestamp
+    source_at: Timestamp | None = None
 
     @model_validator(mode="after")
     def validate_market(self) -> "MarketQuote":
