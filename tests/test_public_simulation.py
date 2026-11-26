@@ -10,6 +10,7 @@ import pytest
 from arbitrage.config import load_config
 from arbitrage.market_data import Unavailable
 from arbitrage.models import EvaluationStatus, Holding, Reason
+from arbitrage.runtime import Runtime
 from arbitrage.simulation import SimulationEngine
 from arbitrage.storage import Storage
 from test_market_data import Exchange, Hedera, POOL_TIME
@@ -87,3 +88,42 @@ def test_public_replay_reservation_restart_and_reconciliation(tmp_path, monkeypa
     with sqlite3.connect(store.path) as db:
         assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.parametrize("emergency", [False, True])
+def test_expired_session_drains_prior_admission_only(tmp_path, monkeypatch, emergency):
+    market = RecordedMarket(150_000)
+    config = load_config(CONFIG)
+    config = config.model_copy(update={"simulation": config.simulation.model_copy(update={
+        "hedera_estimate_sender": "0x0000000000000000000000000000000000001234",
+    })})
+    clock = [market.now, 0.0]
+    runtime = Runtime(tmp_path, clock=lambda: clock[0], timer=lambda: clock[1])
+    runtime.initialize(config)
+    engine = SimulationEngine.from_public(runtime.storage, config.simulation, market)
+    create_engine = lambda *_: engine
+    monkeypatch.setattr("arbitrage.runtime.SimulationEngine.from_public", create_engine)
+
+    async def advance(seconds):
+        market.now += timedelta(seconds=seconds)
+
+    engine._sleep = advance
+    with runtime.owner():
+        runtime.activate("start", "worker-1", config)
+        cycle = asyncio.run(engine.worker("worker-1").analyze())
+        assert any(item.status == EvaluationStatus.ELIGIBLE for item in cycle.evaluations)
+        assert state(runtime.storage)[2:] == (1, 3)
+        clock[0] += timedelta(hours=24)
+        if emergency:
+            runtime.control("emergency")
+            assert runtime.activate("recover", None) is None
+            assert state(runtime.storage)[2:] == (1, 3)
+            return
+        activation = runtime.activate("recover", None)
+        assert activation is not None
+        asyncio.run(runtime.run(*activation, asyncio.Event()))
+        assert runtime.status()["session"]["state"] == "expired"
+        assert runtime.status()["analysis_cycles"] == 1
+
+    assert state(runtime.storage)[2:] == (1, 0)
+    assert runtime.activate("recover", None) is None
