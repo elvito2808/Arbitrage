@@ -148,10 +148,18 @@ def test_clock_rollback_and_monotonic_deadline(operations):
     assert restarted.status()["session"]["state"] == "expired"
 
 
+@pytest.fixture
+def kucoin_offline(monkeypatch):
+    async def unavailable(_public, _resource):
+        raise Unavailable("fixture WebSocket unavailable")
+
+    monkeypatch.setattr(PublicConnections, "kucoin", unavailable)
+
+
 @pytest.mark.parametrize("control,reason", [
     ("emergency", Reason.WORKER_INACTIVE), ("deadline", Reason.SESSION_DEADLINE),
 ])
-def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, control, reason):
+def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, kucoin_offline, control, reason):
     original, config, clock = operations
 
     async def run():
@@ -197,7 +205,7 @@ def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, c
     asyncio.run(run())
 
 
-def test_deadline_cancels_cycle_interval_sleep(operations, monkeypatch):
+def test_deadline_cancels_cycle_interval_sleep(operations, monkeypatch, kucoin_offline):
     original, config, clock = operations
 
     async def run():
