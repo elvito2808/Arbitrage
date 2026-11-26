@@ -143,7 +143,10 @@ class Runtime:
             if row and row["state"] in ("running", "paused") and self._expired(row, now):
                 self._transition(tx, row, "expired", now)
                 row = self.latest(tx)
-            if action == "recover" and (row is None or row["state"] != "running"):
+            pending = tx.unresolved_simulation(NETWORK) if action == "recover" else None
+            drain_expired = (row is not None and row["state"] == "expired"
+                             and pending is not None and pending["status"] == "active")
+            if action == "recover" and not drain_expired and (row is None or row["state"] != "running"):
                 return None
             if tx._db.execute("SELECT 1 FROM runtime_stop_latch").fetchone():
                 raise ValueError("emergency stop is latched")
@@ -160,7 +163,7 @@ class Runtime:
                 self._transition(tx, row, "running", now)
             else:
                 expected = "paused" if action == "resume" else "running"
-                if row is None or row["state"] != expected:
+                if row is None or (row["state"] != expected and not drain_expired):
                     return None
                 self.session_id = row["id"]
                 worker_id = row["worker_id"]
@@ -279,6 +282,12 @@ class Runtime:
             tx._db.execute("INSERT OR REPLACE INTO runtime_health VALUES (1, ?)", (json.dumps(health),))
         public.retries = engine.dex.cache_hits = engine.cex.cache_hits = self.log.dropped = 0
 
+    def _recovery_allowed(self, tx, shutdown, *, expired=False):
+        row = self.latest(tx)
+        return (not shutdown.is_set() and row is not None and row["id"] == self.session_id
+                and row["state"] == ("expired" if expired else "running")
+                and not tx._db.execute("SELECT 1 FROM runtime_stop_latch").fetchone())
+
     async def _watch(self, worker_id, shutdown):
         while not shutdown.is_set() and self.tick(worker_id):
             await self.sleep(POLL_SECONDS)
@@ -303,6 +312,7 @@ class Runtime:
             engine.gate = lambda tx, worker, now: (
                 Reason.WORKER_INACTIVE if shutdown.is_set() else self.gate(tx, worker, now)
             )
+            engine.recovery_gate = lambda tx: self._recovery_allowed(tx, shutdown)
             self.log.emit(Event.WORKER_STATE, worker=worker_id)
             watch = asyncio.create_task(self._watch(worker_id, shutdown))
             cycles = asyncio.create_task(self._cycles(engine, public, worker_id))
@@ -320,6 +330,12 @@ class Runtime:
                         if row["id"] == self.session_id and row["state"] == "running":
                             self._transition(tx, row, "stopped", self.now())
                 self.log.emit(Event.WORKER_STATE, worker=worker_id)
+                self._health(public, engine)
+            with self.storage.transaction() as tx:
+                drain = self._recovery_allowed(tx, shutdown, expired=True)
+            if drain:
+                engine.recovery_gate = lambda tx: self._recovery_allowed(tx, shutdown, expired=True)
+                await engine.recover()
                 self._health(public, engine)
 
 
