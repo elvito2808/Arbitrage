@@ -78,8 +78,9 @@ individually. The historical 2026-11-26 prices are offline fixtures.
 ## Opportunity analysis
 
 Initialize `Storage` before creating an `OpportunityCoordinator`. Schema version
-2 upgrades version 1 in one transaction and retains existing balances,
-reservations, workers and records. Seed virtual balances using the existing
+3 extends versions 1 and 2 in one transaction and retains existing balances,
+reservations, workers and records. Older application versions reject the upgraded
+database. Seed virtual balances using the existing
 P02 API. Create a coordinator with `OpportunityCoordinator.from_public(storage,
 config.simulation, public)` and share it across workers. Obtain a worker with
 `coordinator.worker("hedera-main")`, call `worker.start()`, await
@@ -120,4 +121,55 @@ commits both evaluations and individual source IDs together. Duplicates
 produce a reason-coded record without consuming the other source ID.
 Worker states, analysis records and deduplication are scoped to the shared
 database file. An eligible analysis is a point-in-time result. Balance
-reservations, execution and worker process supervision belong to later phases.
+reservations and execution use the P05 engine below.
+
+## Persistent simulated execution
+
+Create `SimulationEngine.from_public(storage, config.simulation, public)` for
+normal operation. Initialize the database and seed virtual holdings as above.
+Call `await engine.recover()` before a worker begins analysis after restart.
+For an already-running worker, `await worker.analyze()` runs analysis and can
+admit a simulation within the same SQLite transaction. Call
+`await engine.recover()` to advance the admitted simulation. Worker lifecycle
+and scheduling remain the caller's responsibility. Recovery leaves persisted
+worker state alone.
+
+The approved public adapters do not independently verify route execution gas.
+The engine records reason-coded analysis with zero execution admissions and
+zero reservations in that condition. A route-evidence object alone conveys no
+execution authority. The positive execution tests subclass the engine in
+`tests/test_simulation.py`, authenticate fixture-specific provenance there,
+and use offline adapters and disposable databases. Normal configuration has
+no option to authorize fixture gas or recover a fixture execution.
+
+Admission rechecks the P04 evaluation against its persisted cycle and source
+IDs, lease, worker, freshness, balances and risk limits. It reserves the
+venue inputs, including the stressed buy amount and up to three capped DEX
+gas budgets. The request stores the evaluated quotes, approved CEX depth, gas
+basis and execution scenario. SQLite enforces one unresolved trade per network.
+
+Recovery commits each attempt's start before waiting asynchronously for its
+persisted deadline. At that deadline it records the result, ledger entries and
+reservation changes atomically. DEX success is committed before the CEX leg
+starts. CEX simulation walks the stored initial book and uses the stored fee.
+The result records modeled fills separately from the request. The DEX quote
+includes the AMM fee. Confirmed DEX fills and reverts debit modeled HBAR gas
+at the observed gas price. A scripted timeout represents proven nonexecution.
+An ambiguous timeout must be represented by an unknown outcome.
+
+Each leg has up to three total attempts. Only a reconciled no-fill result
+permits another attempt. A partial CEX fill ends the trade as incomplete.
+Known exhaustion or partial fills release unspent funds. Unknown results end
+automatic execution in `manual_review`. Recovery retains the possibly spent
+input and gas, releases only proven-unused holds and blocks new executions for
+that network. On a journal or settlement discrepancy it retains the existing
+holds. No automatic resolution or reverse compensation is applied. There is
+no cumulative realized-loss stop.
+
+For audit, `simulated_trades` stores the immutable request and current status.
+The same ID keys the persisted analysis and the append-only
+`simulation_events` journal. Each event records its timestamp and outstanding
+holds, together with any fill, fee, gas and corresponding ledger identifiers.
+`simulation_misses` records reasons when the analysis passed but admission did
+not. Other rejection reasons remain in `analysis_cycles`. Query operational
+SQLite files only in private runtime storage.

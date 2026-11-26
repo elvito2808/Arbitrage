@@ -1,0 +1,64 @@
+ARB-032–039 revision 1 | 2026-11-26 UTC | Agent 2 specialist evidence
+
+Provenance
+A elvito2808/Agent-Management-Framework, v1.0.0
+  cb23c4b08d2103aead243b59d6b66f325361a4bc
+B elvito2808/Arbitrage, verified main and dispatch
+  75a64c67a92af2dc75c5619d0ff1b4239a923a95
+Implementation/test revision
+  08dd31fa6a9f7d82f30a99fdc3ccab04b8ca9641
+Local branch work-p05, isolated checkout. GitHub read and push reported true.
+The publication branch was absent before the first push.
+Commands included git remote -v, git status --short --branch, git rev-parse
+HEAD, git show <approved-A-pin>:<file>, git fetch origin main, git worktree add,
+and gh api for the repository permissions, A pin, and B main SHA.
+
+Verification environment
+Linux, Python 3.12.14, SQLite 3.53.1, pytest 9.2.0, pluggy 1.7.0.
+Commands in the isolated B checkout (venv abbreviated):
+  python3.12 -m venv /workspace/scratch/p05-final
+  <venv>/bin/python --version
+  <venv>/bin/python -m pip install '.[test]'
+  <venv>/bin/python -m pip check
+  <venv>/bin/python -I -c 'import arbitrage.simulation, sqlite3; print(arbitrage.simulation.__file__, sqlite3.sqlite_version)'
+  <venv>/bin/python -m pytest -rs
+Observed: no broken requirements. The imported module was in the venv
+site-packages. Full suite collected 119 tests: 116 passed, 3 skipped.
+Three skips were the opt-in public network smoke cases.
+The prior-only regression run passed 87 tests with the same 3 skips.
+
+Acceptance attempt ledger
+- Bootstrap first requested a dev extra, then used the declared test extra.
+  The clean final install used the test extra in a newly created venv.
+- P05 partial-fill accounting, run 1: two hand-calculated micro-USDT
+  expectations were incorrect. Observed totals were verified independently
+  with Decimal using both levels, the adverse price factor and the fee.
+  Run 2: both corrected cases passed (26,789,443 SELL and 25,706,942 BUY).
+- P05 unsafe-market admission, first execution of the added maximum-loss
+  case: the selected bid was profitable within the stress ceiling, so the
+  fixture did not meet its intended rejection setup. Run 2 used a bid of
+  0.05305 to cross the stressed-loss boundary and passed. Both corrections
+  were to test inputs or expectations. The original P04 risk tests passed.
+- Other P05 acceptance cases passed on their first run. They cover two
+  exact-size directions; balances, gas, fees and reservations; asynchronous
+  ordering and persistent delay; partial depth; revert, timeout and CEX
+  failure; bounded retry; interruption before and after durable settlement;
+  concurrent admission and recovery; idempotency; v2-to-v3 migration and
+  migration rollback; journal discrepancy, unknown outcomes and worker stop;
+  bad and missing gas provenance, including the real P03 adapter code fed
+  recorded public responses; and simulation with socket connects denied.
+- An explicit downgrade probe loaded B baseline storage code through
+  PYTHONPATH from git archive and opened a disposable v3 database. The v2
+  implementation raised "unsupported SQLite schema version 3" as expected.
+
+Diff verification
+Reviewed complete changes against the dispatch baseline. git diff --check
+and authorized-path verification passed. Added lines were scanned for common
+GitHub token, cloud key, private key, bearer token and credential-in-URL
+patterns. No matches. The synthetic HMAC input is a deterministic test
+vector. Runtime SQLite files are outside the tracked paths.
+
+Verification limits
+Public network probes, physical power-loss behavior, sustained availability
+and independent durable backup were outside the observed tests. No trusted
+public route-specific execution gas was established.

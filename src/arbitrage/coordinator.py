@@ -319,8 +319,14 @@ class OpportunityCoordinator:
                 evaluations=tuple(self._evaluate(tx, direction, market, now) for direction in Direction),
             )
             tx.add_analysis(NETWORK, result, ids)
+            self._after_analysis(tx, result, market, now)
         tx.release_analysis(NETWORK, cycle_id, now)
         return result
+
+    def _after_analysis(
+        self, tx: Transaction, cycle: AnalysisCycle, market: Market, now: datetime,
+    ) -> None:
+        """Optional in-transaction consumer of a freshly evaluated market."""
 
     async def _cycle(self, worker_id: str) -> AnalysisCycle:
         cycle_id = uuid4().hex

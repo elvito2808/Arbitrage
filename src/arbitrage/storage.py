@@ -11,7 +11,7 @@ from .models import (
     LedgerEntry, Opportunity, Reason, Reservation, Worker, WorkerState,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = (
     """CREATE TABLE balances (
@@ -74,6 +74,37 @@ _ANALYSIS_SCHEMA = (
 )
 
 
+_SIMULATION_SCHEMA = (
+    """CREATE TABLE simulated_trades (
+        id TEXT PRIMARY KEY REFERENCES analysis_cycles(id),
+        network TEXT NOT NULL,
+        request TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN
+            ('active', 'filled', 'failed', 'incomplete', 'manual_review'))
+    ) STRICT""",
+    """CREATE UNIQUE INDEX one_unresolved_trade ON simulated_trades(network)
+       WHERE status IN ('active', 'manual_review')""",
+    """CREATE TABLE simulation_events (
+        id TEXT PRIMARY KEY,
+        trade_id TEXT NOT NULL REFERENCES simulated_trades(id),
+        payload TEXT NOT NULL
+    ) STRICT""",
+    """CREATE TRIGGER keep_simulation_request
+       BEFORE UPDATE OF id, network, request ON simulated_trades
+       BEGIN SELECT RAISE(ABORT, 'simulation request is immutable'); END""",
+    """CREATE TRIGGER keep_simulation_event
+       BEFORE UPDATE ON simulation_events
+       BEGIN SELECT RAISE(ABORT, 'simulation event is immutable'); END""",
+    """CREATE TRIGGER keep_simulation_event_history
+       BEFORE DELETE ON simulation_events
+       BEGIN SELECT RAISE(ABORT, 'simulation event is immutable'); END""",
+    """CREATE TABLE simulation_misses (
+        cycle_id TEXT PRIMARY KEY REFERENCES analysis_cycles(id),
+        reason TEXT NOT NULL
+    ) STRICT""",
+)
+
+
 class Storage:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -83,10 +114,12 @@ class Storage:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version == SCHEMA_VERSION:
                 return
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise ValueError(f"unsupported SQLite schema version {version}")
-            for statement in (_SCHEMA + _ANALYSIS_SCHEMA if version == 0 else _ANALYSIS_SCHEMA):
-                db.execute(statement)
+            for minimum_version, statements in enumerate((_SCHEMA, _ANALYSIS_SCHEMA, _SIMULATION_SCHEMA)):
+                if version <= minimum_version:
+                    for statement in statements:
+                        db.execute(statement)
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
@@ -260,6 +293,59 @@ class Transaction:
     def analysis(self, cycle_id: str) -> AnalysisCycle | None:
         row = self._db.execute("SELECT payload FROM analysis_cycles WHERE id = ?", (cycle_id,)).fetchone()
         return AnalysisCycle.model_validate_json(row["payload"]) if row else None
+
+    def owns_snapshots(self, network: str, cycle_id: str, ids: tuple[str, str]) -> bool:
+        rows = self._db.execute(
+            """SELECT snapshot_id FROM analyzed_snapshots
+               WHERE network = ? AND cycle_id = ?""", (network, cycle_id),
+        )
+        return {row[0] for row in rows} == set(ids)
+
+    def unresolved_simulation(self, network: str) -> sqlite3.Row | None:
+        return self._db.execute(
+            """SELECT * FROM simulated_trades WHERE network = ?
+               AND status IN ('active', 'manual_review')""", (network,),
+        ).fetchone()
+
+    def add_simulation(self, trade_id: str, network: str, request: str) -> None:
+        self._db.execute(
+            "INSERT INTO simulated_trades VALUES (?, ?, ?, 'active')",
+            (trade_id, network, request),
+        )
+
+    def simulation_status(self, trade_id: str) -> str | None:
+        row = self._db.execute(
+            "SELECT status FROM simulated_trades WHERE id = ?", (trade_id,),
+        ).fetchone()
+        return row[0] if row else None
+
+    def finish_simulation(self, trade_id: str, status: str) -> None:
+        result = self._db.execute(
+            "UPDATE simulated_trades SET status = ? WHERE id = ? AND status = 'active'",
+            (status, trade_id),
+        )
+        if result.rowcount != 1:
+            raise ValueError("simulation is already resolved")
+
+    def simulation_miss(self, cycle_id: str, reason: str) -> None:
+        self._db.execute("INSERT INTO simulation_misses VALUES (?, ?)", (cycle_id, reason))
+
+    def add_simulation_event(self, event_id: str, trade_id: str, payload: str) -> None:
+        self._db.execute(
+            "INSERT INTO simulation_events VALUES (?, ?, ?)", (event_id, trade_id, payload),
+        )
+
+    def simulation_events(self, trade_id: str) -> tuple[str, ...]:
+        rows = self._db.execute(
+            "SELECT payload FROM simulation_events WHERE trade_id = ? ORDER BY rowid", (trade_id,),
+        )
+        return tuple(row[0] for row in rows)
+
+    def simulation_ledger(self, trade_id: str) -> tuple[LedgerEntry, ...]:
+        rows = self._db.execute(
+            "SELECT * FROM ledger WHERE id GLOB ? ORDER BY rowid", (f"sim:{trade_id}:*",),
+        )
+        return tuple(LedgerEntry.model_validate(dict(row)) for row in rows)
 
     def add_opportunity(self, opportunity: Opportunity) -> None:
         self._db.execute(

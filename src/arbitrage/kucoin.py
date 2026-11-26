@@ -133,8 +133,8 @@ class InsufficientDepth(MarketDataError):
     """Visible depth cannot cover the requested size."""
 
 
-def priced_units(levels: tuple[Level, ...], side: Side, fee: Fraction) -> int:
-    remaining = Fraction(1000)
+def depth_value(levels: tuple[Level, ...], quantity: Fraction) -> Fraction:
+    remaining = quantity
     gross = Fraction(0)
     for entry in levels:
         quantity = min(remaining, entry.quantity)
@@ -143,7 +143,12 @@ def priced_units(levels: tuple[Level, ...], side: Side, fee: Fraction) -> int:
         if not remaining:
             break
     if remaining:
-        raise InsufficientDepth("visible KuCoin depth cannot cover 1,000 HBAR")
+        raise InsufficientDepth("visible KuCoin depth cannot cover the requested quantity")
+    return gross
+
+
+def priced_units(levels: tuple[Level, ...], side: Side, fee: Fraction) -> int:
+    gross = depth_value(levels, Fraction(1000))
     total = gross * (1 + fee if side == Side.BUY else 1 - fee) * 10**6
     units = -(-total.numerator // total.denominator) if side == Side.BUY else int(total)
     if units <= 0:
