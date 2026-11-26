@@ -1,0 +1,5 @@
+python -m pytest -q -p no:cacheprovider tests/qa/test_p07_financial.py tests/test_hedera_gas.py tests/test_coordinator.py tests/test_simulation.py tests/test_public_simulation.py tests/qa/test_round1_independent.py
+........................................................................ [ 59%]
+.................................................                        [100%]
+121 passed in 1.60s
+exit=0

@@ -1,0 +1,30 @@
+python -m pytest -q -p no:cacheprovider tests/qa/test_p07_financial.py tests/test_hedera_gas.py tests/test_coordinator.py tests/test_simulation.py tests/test_public_simulation.py tests/qa/test_round1_independent.py
+........................................................................ [ 59%]
+.....................................F...........                        [100%]
+=================================== FAILURES ===================================
+__ test_unsafe_fixture_markets_never_reserve[cex_age-value1-cross_venue_skew] __
+
+offline = (<arbitrage.storage.Storage object at 0x7fe181487470>, <test_simulation.OfflineMarket object at 0x7fe180ea5b80>, <function offline.<locals>.make at 0x7fe180ed5800>)
+setting = 'cex_age', value = datetime.timedelta(seconds=5)
+reason = <Reason.CROSS_VENUE_SKEW: 'cross_venue_skew'>
+
+    @pytest.mark.parametrize(("setting", "value", "reason"), [
+        ("dex_age", timedelta(seconds=11), Reason.STALE_OR_INVALID_CLOCK),
+        ("cex_age", timedelta(seconds=5), Reason.CROSS_VENUE_SKEW),
+        ("quantity", Fraction(999), Reason.INSUFFICIENT_DEPTH),
+        ("price_range", (10**12, 2 * 10**12 + 1), Reason.GAS_INVALID),
+        ("bid", Fraction("0.05305"), Reason.MAXIMUM_LOSS),
+    ])
+    def test_unsafe_fixture_markets_never_reserve(offline, setting, value, reason):
+        store, market, make = offline
+        setattr(market, setting, value)
+        before = state(store)
+>       assert admit(make()).evaluations[0].reason == reason
+E       AssertionError: assert None == <Reason.CROSS_VENUE_SKEW: 'cross_venue_skew'>
+E        +  where None = Evaluation(direction=<Direction.BUY_DEX: 'buy_dex'>, status=<EvaluationStatus.ELIGIBLE: 'eligible_for_simulation'>, re...00, gas_rpc=None, gas_estimation_error=None, dex_net_quote_usdc=None, estimated_gas_hbar=None, estimated_gas_usdc=None).reason
+
+tests/test_simulation.py:511: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_simulation.py::test_unsafe_fixture_markets_never_reserve[cex_age-value1-cross_venue_skew]
+1 failed, 120 passed in 1.81s
+exit=1

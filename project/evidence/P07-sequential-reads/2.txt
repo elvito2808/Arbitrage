@@ -1,0 +1,4 @@
+python -m pytest -q -p no:cacheprovider tests/test_coordinator.py tests/test_market_data.py tests/qa/test_p07_faults.py -k timestamp or stale or cache_source or incomplete
+..............................                                           [100%]
+30 passed, 68 deselected in 0.36s
+exit=0
