@@ -109,8 +109,8 @@ class Storage:
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def initialize(self) -> None:
-        with self._connection() as db:
+    def initialize(self, *, wal: bool = False) -> None:
+        with self._connection(wal=wal) as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version == SCHEMA_VERSION:
                 return
@@ -123,10 +123,12 @@ class Storage:
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
+    def _connection(self, *, wal: bool = False) -> Iterator[sqlite3.Connection]:
         with closing(sqlite3.connect(self.path, timeout=5, isolation_level=None)) as db:
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA foreign_keys = ON")
+            if wal:
+                db.execute("PRAGMA journal_mode = WAL")
             db.execute("BEGIN IMMEDIATE")
             with db:
                 yield db
