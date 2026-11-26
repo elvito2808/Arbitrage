@@ -1,0 +1,87 @@
+ARB-018-025 | P03 revision 1 | Agent 2 | 2026-11-26 UTC
+A cb23c4b08d2103aead243b59d6b66f325361a4bc (VERSION 1.0.0), read only
+B a89913b5006b096f9c5ac111c308594fd68e3fd7 (clean isolated work checkout)
+
+Initialization (exit 0)
+git remote get-url origin; git status --short --branch; git rev-parse HEAD
+git ls-remote origin refs/heads/main refs/heads/agent-2/arb-018-025
+gh api repos/elvito2808/Arbitrage --jq '{full_name,default_branch,permissions}'
+B main matched the assignment base, the publication branch was absent and
+GitHub reported pull and push permission. Pinned A/B project inputs were read
+via Git and GitHub. A VERSION and the owner decision identify the framework release and pin.
+No original module attachments were present in the runner library. The
+committed assignment and approved project requirements supplied the scope.
+
+Installed verification (exit 0 for each)
+python3.12 -m venv <fresh-path>
+python -V    -> Python 3.12.14
+python -m pip install '.[test]'
+python -m pip check    -> No broken requirements found.
+python -I -c 'import arbitrage.market_data, arbitrage.saucerswap, arbitrage.kucoin'
+python -m pytest    -> 53 passed, 3 skipped (opt-in network tests)
+pytest 9.2.0, aiohttp 3.14.5, Pydantic 2.14.4.
+Test location: tests/test_market_data.py and P02 tests retained unchanged.
+After receipt-timestamp and fixture refinements, wheel rebuilt with
+python -m pip install --no-deps . and install/import/pytest checks repeated.
+
+Attempt ledger
+- ARB-019, ARB-020, ARB-024 offline, ARB-025: implementation attempt 1 passed.
+- ARB-021/022/023 fixture group: implementation attempt 1 gave 52 passed,
+  1 failed, 3 skipped. The small exact-divisibility fixture's expected SELL
+  had omitted the full initial WHBAR reserve in its denominator. Attempt 2
+  corrected the expected value to 331 and passed. Both P01 figures agreed
+  with the router fixtures on the first and final runs.
+- ARB-018/020–022 public Hedera and ARB-018/024 public KuCoin WS had two
+  bounded public smoke runs. ARB-018/024 KuCoin REST passed both times.
+  Final smoke blocked on WS; no third WS attempt.
+
+Public verification command
+ARB_PUBLIC_SMOKE=1 PYTHONPATH=src python -m pytest -q -s tests/test_market_smoke.py
+Each venue probe is capped at 20 seconds, uses public endpoints and closes
+its session. Installation tests use the installed wheel without PYTHONPATH.
+
+Public smoke 1 (exit 1; 1 passed, 2 failed; 25.24s)
+- Hedera: public request deadline exceeded.
+- KuCoin REST source 2026-11-26T02:13:05.748000+00:00, client reception
+  2026-11-26T02:13:05.837494+00:00. Both sides covered 1,000 HBAR.
+- KuCoin WS: reconnect limit reached.
+
+Sanitized diagnosis between smoke runs
+- Public KuCoin bootstrap HTTP 200, application status 200000. It advertised
+  an 18-second ping interval and 10-second timeout. No token recorded.
+- A bounded aiohttp diagnostic using the configured proxy returned Hedera
+  chain 0x127. The WS diagnostic timed out without an HTTP status. With the
+  proxy disabled for diagnosis the RPC timed out and WS bootstrap failed.
+- KuCoin symbol metadata reported 0.0001 HBAR base increment, 0.00001
+  price increment and 0.00001 USDT exchange quote increment.
+
+Public smoke 2 (exit 1; 2 passed, 1 failed; 18.94s)
+- Hedera chain 295, block 102784490, consensus end
+  2026-11-26T02:14:13.520760+00:00, RPC header received
+  2026-11-26T02:14:18.244157+00:00. Router verified both directions and
+  execution gas cost validity was false for both. Following this run the
+  quote receipt field was moved to after mirror/reserve receipt and the
+  final offline suite was rerun.
+- KuCoin REST source 2026-11-26T02:14:20.279000+00:00, client reception
+  2026-11-26T02:14:20.356284+00:00. Both sides covered 1,000 HBAR.
+- KuCoin WS: reconnect limit reached (TimeoutError). Public WS completion
+  BLOCKED in this runner. Fake bootstrap, subscription, disconnect and
+  bounded queue tests passed independently of endpoint availability.
+- No cross-venue price comparison or continuity inference from these probes.
+
+Official references checked (HTTP 200 on 2026-11-26)
+https://docs.hedera.com/evm/development/json-rpc
+https://mainnet-public.mirrornode.hedera.com/api/v1/docs/openapi.yml
+https://docs.saucerswap.finance/developers/v1/swap/swap-quote.md
+https://www.kucoin.com/docs-new/rest/spot-trading/market-data/get-part-orderbook
+https://www.kucoin.com/docs-new/websocket-api/base-info/get-public-token-spot-margin
+
+Final review
+git diff --cached --check
+git diff --cached --name-only
+git diff --cached
+Staged paths were checked against the assignment allowlist and added lines
+scanned for private-key headers, common credential formats, literal
+authorization settings and tokenized URLs. Only public identifiers,
+documented public endpoints and synthetic test values are present.
+Independent durable backup deferred. A was left read-only.

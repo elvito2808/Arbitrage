@@ -18,4 +18,59 @@ Persist worker, opportunity and execution records with the corresponding transac
 
 Use `OperationalLog.emit()` with its event and level enums. Caller metadata is discarded. The bounded producer returns false for rejected or dropped events. A consumer can retrieve JSON lines with `take()`. Financial ledger entries remain in SQLite. This phase provides the queue and event format, so a later lifecycle phase can attach the output sink.
 
-`arbitrage.interfaces` defines the typed contracts for later phases. This package contains no market clients, swap execution, scheduler, CLI or deployment units.
+`arbitrage.interfaces` defines the typed contracts for later phases. The adapters below implement its DEX and CEX quote interfaces.
+
+## Public market adapters
+
+Use a caller-owned `aiohttp.ClientSession` and pass it to
+`arbitrage.market_data.PublicConnections`. Reuse the session for Hedera JSON-RPC,
+the Hedera mirror node, and KuCoin REST and WebSocket. Enable `trust_env=True` when
+the runner provides an outbound proxy. The caller owns the optional
+`KuCoin.stream.run()` task and cancels and awaits it before closing the session.
+
+- Use `await SaucerSwap(public).snapshot()` for both directions from the same
+  block. The result includes both requested quotes, token reserves in smallest
+  units, the pair's last update epoch, and the router agreement flag. Block
+  freshness uses the mirror consensus range end. The relay reports the first
+  32 bytes of the mirror block hash.
+- Use one `await cex.snapshot()` and then `cex.price(book, Side.BUY)` and
+  `cex.price(book, Side.SELL)` for both directions from the same book. Pass
+  `fee=config.simulation.cex_fee_fraction` and set each adapter's
+  `cache_age` from the corresponding configuration in seconds.
+  The symbol's base and price increments validate depth levels. The fixed
+  1,000 HBAR is the requested quantity. The internal USDT quantum is 10⁻⁶
+  USDT, with buy costs rounded up and sell proceeds rounded down after the
+  assumed quote-currency fee. The venue's quote increment describes its
+  order interface. These totals are for simulation requests.
+- `await cex.indicative_ticker()` and the optional WS stream expose best bid,
+  ask and sizes with trade and receive times. Pricing always uses timestamped
+  depth-20. The ticker clock describes the last trade and can lag behind book
+  changes. The WS queue keeps one latest event and is cleared on reconnect.
+  Reconnect obtains a new public bootstrap token, subscribes again and
+  invalidates earlier depth snapshots. Keep WS URLs and bootstrap data out of
+  logs.
+
+HTTP uses at most three attempts per read, 2.5 seconds per attempt and eight
+seconds overall, including backoff. Retry uses exponential jitter and observes
+HTTP `Retry-After` and KuCoin `gw-ratelimit-reset`. A delay beyond the budget
+fails closed. Pool and depth reads each have a nine-second overall deadline.
+Connection failures can reuse a prior snapshot only within its original
+freshness deadline. Both source and receipt age are capped at ten seconds, with
+two seconds of allowed source-ahead skew. An invalid response drops the cache.
+The WS has five-second connection and subscription deadlines, provider-supplied
+heartbeat limits, and three connection attempts per run. The caller can start a
+new run after a surfaced failure.
+
+Gas comes separately for each direction in weibars per gas. The observed price
+and its 2× cap define the scenario range. The P01 single 244,829-gas historical
+swap is an illustrative proxy for each direction. Execution gas remains unknown
+and the adapter marks cost validity false. P01's 34,133-gas view estimate only
+measures the quote read. Divide wei-denominated HBAR exposure by 10¹⁸, then
+multiply by an independently fresh HBAR/USDT price to model the gas exposure.
+Any USDC conversion uses the approved 1:1 simulation parity assumption.
+The adapter does not combine prices across venues.
+
+Run `python -m pytest` for offline verification. The separately opted-in
+`ARB_PUBLIC_SMOKE=1 python -m pytest -s tests/test_market_smoke.py` bounds each
+public probe to 20 seconds. Service failures in the opt-in run are reported
+individually. The historical 2026-11-26 prices are offline fixtures.
