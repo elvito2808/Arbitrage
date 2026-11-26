@@ -144,6 +144,11 @@ def historical_book():
 
 
 class Exchange:
+    metadata = {
+        "symbol": "HBAR-USDT", "baseCurrency": "HBAR", "quoteCurrency": "USDT",
+        "baseIncrement": "0.0001", "priceIncrement": "0.00001", "quoteIncrement": "0.00001",
+    }
+
     def __init__(self):
         self.now = BOOK_TIME + timedelta(milliseconds=50)
         self.depth = historical_book()
@@ -154,7 +159,7 @@ class Exchange:
 
     async def kucoin(self, resource):
         if resource == "symbol":
-            return {"baseIncrement": "0.0001", "priceIncrement": "0.00001", "quoteIncrement": "0.00001"}
+            return self.metadata
         if resource == "ticker":
             return {"sequence": "41", "time": self.depth["time"] - 120_000,
                     "bestBid": "0.05297", "bestBidSize": "8500.6656",
@@ -360,3 +365,100 @@ def test_ws_refreshes_token_resubscribes_and_bounds_queue():
         assert cex.stream.health == "idle"
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("field,invalid", [
+    ("symbol", "BTC-USDT"), ("baseCurrency", "BTC"), ("quoteCurrency", "USDC"),
+    ("symbol", None), ("baseCurrency", None), ("quoteCurrency", None),
+    ("symbol", ["HBAR-USDT"]), ("baseCurrency", 123), ("quoteCurrency", {"value": "USDT"}),
+    ("symbol", "hbar-usdt"), ("baseCurrency", " HBAR"), ("quoteCurrency", ""),
+])
+def test_kucoin_validates_requested_identity_before_reading_depth(field, invalid):
+    class RecordingExchange(Exchange):
+        def __init__(self):
+            super().__init__()
+            self.metadata = self.metadata.copy()
+            self.requests = []
+
+        async def kucoin(self, resource):
+            self.requests.append(resource)
+            return await super().kucoin(resource)
+
+    async def exercise():
+        api = RecordingExchange()
+        cex = KuCoin(api)
+        original = await cex.snapshot()
+        metadata = api.metadata.copy()
+        cex._invalidate()  # The same invalidation used on WS reconnect.
+        if invalid is None:
+            del api.metadata[field]
+        else:
+            api.metadata[field] = invalid
+        api.requests.clear()
+        with pytest.raises(MarketDataError, match="symbol identity"):
+            await cex.snapshot()
+        assert api.requests == ["symbol"]
+        with pytest.raises(MarketDataError, match="invalidated"):
+            cex.price(original, Side.BUY)
+        api.down = True
+        with pytest.raises(MarketDataError, match="symbol identity"):
+            await cex.snapshot()
+        api.metadata = metadata
+        api.down = False
+        assert (await cex.quote(Side.BUY, TRADE_UNITS)).quote_units == 53_053_000
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("metadata", [
+    None,
+    [],
+    ["HBAR-USDT"],
+    "HBAR-USDT",
+    42,
+    True,
+    {},
+    {**Exchange.metadata, "baseIncrement": []},
+    {**Exchange.metadata, "priceIncrement": "NaN"},
+    {**Exchange.metadata, "quoteIncrement": "0"},
+], ids=[
+    "null", "empty-list", "list", "string", "number", "boolean",
+    "empty-object", "invalid-base-increment", "invalid-price-increment", "invalid-quote-increment",
+])
+def test_kucoin_invalid_symbol_metadata_discards_cached_book(metadata):
+    class RecordingExchange(Exchange):
+        def __init__(self):
+            super().__init__()
+            self.requests = []
+
+        async def kucoin(self, resource):
+            self.requests.append(resource)
+            return await super().kucoin(resource)
+
+    async def exercise():
+        api = RecordingExchange()
+        cex = KuCoin(api)
+        original = await cex.snapshot()
+        valid_metadata = api.metadata
+        # Force a metadata refresh with the prior book still eligible for fallback.
+        cex._increments = None
+        api.metadata = metadata
+        api.requests.clear()
+        with pytest.raises(MarketDataError, match="KuCoin|exchange"):
+            await cex.snapshot()
+        assert api.requests == ["symbol"]
+        assert cex._increments is None
+        assert cex._book is None
+        with pytest.raises(MarketDataError, match="invalidated"):
+            cex.price(original, Side.BUY)
+
+        api.metadata = valid_metadata
+        api.down = True
+        with pytest.raises(Unavailable, match="depth unavailable"):
+            await cex.snapshot()
+        assert cex.cache_hits == 0
+
+        api.down = False
+        assert (await cex.quote(Side.BUY, TRADE_UNITS)).quote_units == 53_053_000
+
+    asyncio.run(exercise())
