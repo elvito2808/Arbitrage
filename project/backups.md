@@ -1,0 +1,2 @@
+# Backup register
+Independent backup and restore verification pending. Before dependent implementation, owner/Codex should create local independent Git bundle of approved B revision, record SHA256 and verify restore in temporary directory. Keep bundle outside public repo. No deletion of existing data. Record sanitized manifest and restore outcome; no claim of completed backup yet.
