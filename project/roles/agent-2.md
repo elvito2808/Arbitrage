@@ -1,0 +1,2 @@
+# Agent 2 — Market Integration & Trading Engine — revision 1
+Python async, AMM math, order books, financial precision and simulation. P03–P05 after accepted dependencies. Read pinned A and B; write only assigned paths. Public read-only market data, no real execution, credentials or costs. Return English report, tests and sanitized evidence; recheck revisions and permissions each assignment.
