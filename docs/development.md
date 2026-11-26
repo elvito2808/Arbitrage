@@ -186,7 +186,6 @@ SQLite files only in private runtime storage.
 
 The simulator models SaucerSwap V1 trades using its virtual WHBAR and USDC holdings. The unsigned estimation calls use `swapTokensForExactTokens` for an exact 1,000 WHBAR BUY and `swapExactTokensForTokens` for an exact 1,000 WHBAR SELL. Each includes the corresponding path, amount and slippage bound, recipient, deadline, and zero native value. The historical PDF’s payable `swapExactETHForTokens` follows a different entry point.
 
-
 Verified current estimates retain the provider, chain, bracketed head, unsigned call, raw gas units, price units and times in the persisted evaluation. Gross quotes are in the requested DEX quote. Net DEX quotes include estimated gas at the current RPC price and the fee-free valuation of fresh KuCoin HBAR depth under simulation parity. Risk admission applies the configured conservative gas price cap separately. The model estimates the execution gas component. Future fees can vary with actual gas used, price and other transaction charges.
 
 [Provider and calibration evidence](../project/evidence/ARB-P07.1-gas/verification.md)

@@ -40,6 +40,15 @@ class OperationalLog:
             record["worker"] = worker
         if type(cycle) is str and re.fullmatch(r"[a-f0-9]{32}", cycle):
             record["cycle"] = cycle
+        if event is Event.CONNECTION_STATUS:
+            source, reason = details.get("source"), details.get("reason")
+            if type(source) is str and source in ("websocket", "rest", "unavailable"):
+                record["source"] = source
+            if type(reason) is str and reason in (
+                "fresh_depth", "no_fresh_depth", "websocket_unavailable", "stale_depth",
+                "invalid_depth", "stream_stopped",
+            ):
+                record["reason"] = reason
         line = json.dumps(record)
         try:
             self._buffer.put_nowait(line)

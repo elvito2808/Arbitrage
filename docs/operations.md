@@ -53,6 +53,30 @@ database snapshot. The workbook shows both directions per recorded cycle,
 reason codes, historical fixture outcomes, exact integer or decimal data,
 and an explicit USDC/USDT parity assumption. Missing data is shown as unknown.
 
+## KuCoin market-data sources
+
+The worker uses KuCoin's timestamped public spot level-5 snapshots. Each
+snapshot includes the best bid and ask, their available quantities, and up
+to five levels per side. Quotes walk the visible depth and reject sizes the
+snapshot cannot fill, as with REST. The worker validates the subscription,
+market metadata, increments, book ordering, timestamps and heartbeat.
+
+The existing public REST depth endpoint takes over if WebSocket is unavailable
+or its data is invalid or expires. REST honors provider rate-limit headers
+and may reuse a still-fresh snapshot during a transient outage. WebSocket
+reconnect attempts use exponential backoff from 1 to 15 seconds plus bounded
+jitter. After failure, two consecutive valid snapshots with advancing
+timestamps are required before WebSocket can take over again. An idle market
+can remain on REST if WebSocket has no changed depth to publish.
+
+The `kucoin_source` health field identifies the source selected by pricing.
+The `ws` field records socket readiness separately. Source transitions
+appear in the bounded operational event history and the private workbook.
+Both transports use the same freshness bounds and timestamp-based duplicate
+guard. When both sources fail validation the cycle cannot use CEX depth.
+
+[KuCoin public spot level-5 protocol](https://www.kucoin.com/docs-new/3470069w0)
+
 ## Linux systemd template
 
 **NOT DEPLOYED. Separate owner approval required.** The example in
