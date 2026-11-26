@@ -1,0 +1,13 @@
+2026-11-26 UTC
+Source https://github.com/elvito2808/Arbitrage.git
+Ref refs/heads/work at f3ba66eea85e67d86bccf4eee901b3aec483562d
+Temporary bundle /tmp/arb-backup.atYZtR/Arbitrage-f3ba66e.bundle
+SHA256 c211cd2de7ceaf28bc7f74f38d1e9c1057c625f8b6d76c97973720c88fda7958
+git bundle verify reported complete history and a valid bundle
+git fetch --no-tags from bundle into an empty temporary repository succeeded
+git switch work and git fsck --full succeeded
+Restored HEAD f3ba66eea85e67d86bccf4eee901b3aec483562d
+Restored tree 59f8db4e20443ba83b9cc0c99389f5eabbd0e3ea
+Source and restored HEAD and tree matched
+Restored worktree clean and project/checkpoints/CP-001.md readable
+Durability outside the Codex instance unverified

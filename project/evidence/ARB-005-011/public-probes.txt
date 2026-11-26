@@ -1,0 +1,46 @@
+Hashio chain ID
+{"jsonrpc":"2.0","result":"0x127","id":1}
+HTTP 200 TTFB 0.313553s total 0.313622s
+
+KuCoin initial level1 and level2_20
+{"code":"200000","data":{"time":1795656443368,"sequence":"5752261743","price":"0.05289","size":"6.4276","bestBid":"0.05294","bestBidSize":"6892.368","bestAsk":"0.05297","bestAskSize":"5544.3537"}}
+HTTP 200 TTFB 0.348535s total 0.348598s
+{"code":"200000","data":{"time":1795656591216,"sequence":"5752261753","bids":[["0.05294","6892.368"],["0.05293","3317.5954"],["0.05292","28812.0965"],["0.05291","37613.042"],["0.0529","33327.6439"],["0.05289","28854.1514"],["0.05288","53384.4194"],["0.05287","54049.5344"],["0.05286","44512.4052"],["0.05285","59078.6607"],["0.05284","61854.6029"],["0.05283","45704.7089"],["0.05282","22851.1521"],["0.05281","4.1772"],["0.0528","3849.6566"],["0.05279","17242.999"],["0.05278","17251.1023"],["0.05276","5271.0054"],["0.05275","4.1772"],["0.05274","5165.4169"]],"asks":[["0.05297","5544.3537"],["0.05298","3915.9073"],["0.05299","29718.908"],["0.053","39781.355"],["0.05301","60361.179"],["0.05302","40008.0199"],["0.05303","29558.6384"],["0.05304","70948.0224"],["0.05305","24472.2379"],["0.05306","18826.0643"],["0.05307","8664.191"],["0.05308","29011.7716"],["0.05309","4665.7426"],["0.0531","26187.9986"],["0.05311","1365.0423"],["0.05312","55704.0896"],["0.05313","4149.3126"],["0.05314","4.1772"],["0.05315","10969.3941"],["0.05317","4544.5837"]]}}
+HTTP 200 TTFB 0.266913s total 0.266985s
+
+KuCoin WS (public connection token omitted)
+bootstrap 200 0.234
+WS endpoint wss://ws-api-spot.kucoin.com/ pingInterval 18000 pingTimeout 10000
+welcome 1.026 {"id":"arb-public-check","type":"welcome"}
+2026-11-26T01:30:20.158213+00:00 1.164 {"id": "arb-1", "type": "ack"}
+2026-11-26T01:30:20.170700+00:00 1.176 {"topic": "/market/ticker:HBAR-USDT", "type": "message", "subject": "trade.ticker", "data": {"bestAsk": "0.05294", "bestAskSize": "4305.2287", "bestBid": "0.05291", "bestBidSize": "8671.5744", "price": "0.05289", "sequence": "5752262927", "size": "6.4276", "time": 1795656443368}}
+
+Hedera mirror result, network fees, and estimate of view calldata
+{"amount": 0, "gas_consumed": 244829, "gas_limit": 1200000, "gas_used": 244829, "timestamp": "1795655018.437140104", "result": "SUCCESS", "status": "0x1"}
+200 1.302484
+{"fees": [{"gas": 163, "transaction_type": "ContractCall"}, {"gas": 163, "transaction_type": "ContractCreate"}, {"gas": 163, "transaction_type": "EthereumTransaction"}], "timestamp": "1795489200.207429008"}
+200 0.117131
+{"result":"0x0000000000008555"}
+200 0.137523
+
+
+KuCoin second depth probe HTTP 200, 0.327104 s
+sequence 5752264178, timestamp 1795656669991
+best bid 0.05297 x 8500.6656 HBAR, best ask 0.053 x 3835.502 HBAR
+gw-ratelimit-limit: 2000
+gw-ratelimit-remaining: 1998
+gw-ratelimit-reset: 10949
+
+Mirror block 102783290 HTTP 200, 0.099511 s
+consensus range 1795656612.299567104 through 1795656614.617003104
+
+Mirror logs first attempt HTTP 400, 0.257712 s
+Cannot search topics without a valid timestamp range: No timestamp range or eq operator provided
+Second attempt with a 24-hour timestamp range and limit=1 HTTP 200, 3.362461 s
+Pair contract 0.0.1462797. Swap event timestamp 1795655018.437140104
+Public transaction hash 0xf6e7f69fce92c8a08ba0007539c470c778b13ce59dcb03d40eda79e86917ee0d
+Root contract 0.0.10966181
+
+Token records from /api/v1/tokens/{id}, HTTP 200
+0.0.456858 USD Coin USDC, decimals 6, empty fixed and fractional fees
+0.0.1456986 Wrapped Hbar WHBAR, decimals 8, empty fixed and fractional fees
