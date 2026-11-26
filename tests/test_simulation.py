@@ -499,7 +499,7 @@ def test_v2_migration_rolls_back_on_schema_collision(tmp_path):
 
 @pytest.mark.parametrize(("setting", "value", "reason"), [
     ("dex_age", timedelta(seconds=11), Reason.STALE_OR_INVALID_CLOCK),
-    ("cex_age", timedelta(seconds=5), Reason.CROSS_VENUE_SKEW),
+    ("cex_age", timedelta(seconds=9), Reason.CROSS_VENUE_SKEW),
     ("quantity", Fraction(999), Reason.INSUFFICIENT_DEPTH),
     ("price_range", (10**12, 2 * 10**12 + 1), Reason.GAS_INVALID),
     ("bid", Fraction("0.05305"), Reason.MAXIMUM_LOSS),
@@ -507,6 +507,8 @@ def test_v2_migration_rolls_back_on_schema_collision(tmp_path):
 def test_unsafe_fixture_markets_never_reserve(offline, setting, value, reason):
     store, market, make = offline
     setattr(market, setting, value)
+    if setting == "cex_age":
+        market.dex_age = timedelta(seconds=-2)
     before = state(store)
     assert admit(make()).evaluations[0].reason == reason
     assert state(store) == before

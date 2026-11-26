@@ -417,6 +417,7 @@ async def kucoin_subscription(public: PublicConnections, topic: str):
 async def kucoin_messages(
     ws: aiohttp.ClientWebSocketResponse, topic: str, interval: float, timeout: float,
     connect_id: str, max_silence: float | None = None,
+    validated_source: Callable[[], datetime | None] | None = None,
 ) -> AsyncIterator[dict]:
     """Read public data with heartbeat and an optional advancing depth deadline."""
     loop = asyncio.get_running_loop()
@@ -453,10 +454,11 @@ async def kucoin_messages(
             continue
         if message.get("topic") != topic:
             raise MarketDataError("unexpected KuCoin WS market")
-        data = message.get("data")
-        timestamp = data.get("timestamp") if max_silence is not None and isinstance(data, dict) else None
         yield message
-        if type(timestamp) is int and (last_timestamp is None or timestamp > last_timestamp):
+        timestamp = validated_source() if validated_source is not None else None
+        if max_silence is not None and timestamp is not None and (
+            last_timestamp is None or timestamp > last_timestamp
+        ):
             data_due = loop.time() + max_silence
             last_timestamp = timestamp
 
@@ -472,6 +474,7 @@ class KuCoinDepthStream:
         self.initial_attempt = asyncio.Event()
         self._book: Book | None = None
         self._last_timestamp: datetime | None = None
+        self.last_valid_received_at: datetime | None = None
 
     def current(self) -> Book | None:
         if self._book is None:
@@ -495,20 +498,30 @@ class KuCoinDepthStream:
     async def _listen(self, recovering: bool) -> None:
         steps = await self.market._market_increments()
         previous: Book | None = None
+        validated_timestamp: datetime | None = None
         silence = self.market.cache_age.total_seconds()
         async with kucoin_subscription(self.public, DEPTH_TOPIC) as (socket, interval, timeout, connection):
             self.health = "awaiting_depth"
             try:
-                async for message in kucoin_messages(socket, DEPTH_TOPIC, interval, timeout, connection, silence):
+                async for message in kucoin_messages(
+                    socket, DEPTH_TOPIC, interval, timeout, connection, silence,
+                    lambda: validated_timestamp,
+                ):
                     data = message.get("data")
-                    if message.get("subject") != "level2" or not isinstance(data, dict):
-                        raise MarketDataError("invalid KuCoin WS depth payload")
-                    if any(not isinstance(data.get(side), list) or len(data[side]) > 5
-                           for side in ("bids", "asks")):
-                        raise MarketDataError("invalid KuCoin WS depth side")
-                    received = self.public.clock()
-                    timestamp = data.get("timestamp")
-                    book = book_from({**data, "time": timestamp, "sequence": str(timestamp)}, received, *steps)
+                    try:
+                        if message.get("subject") != "level2" or not isinstance(data, dict):
+                            raise MarketDataError("invalid KuCoin WS depth payload")
+                        if any(not isinstance(data.get(side), list) or len(data[side]) > 5
+                               for side in ("bids", "asks")):
+                            raise MarketDataError("invalid KuCoin WS depth side")
+                        received = self.public.clock()
+                        timestamp = data.get("timestamp")
+                        book = book_from({**data, "time": timestamp, "sequence": str(timestamp)}, received, *steps)
+                    except MarketDataError:
+                        # A malformed depth image contributes no data or freshness.
+                        if self.current() is None:
+                            raise
+                        continue
                     book = replace(book, generation=self.generation, source="websocket")
                     require_fresh(book.source_at, book.received_at, received, self.market.cache_age)
                     if previous is not None and book.generation != previous.generation:
@@ -527,9 +540,11 @@ class KuCoinDepthStream:
                     if not recovering or previous is not None:
                         self._book = book
                         self._last_timestamp = book.source_at
+                        self.last_valid_received_at = book.received_at
                         self.health = "healthy"
                         self.initial_attempt.set()
                     previous = book
+                    validated_timestamp = book.source_at
             except (Unavailable, TimeoutError, aiohttp.ClientError, aiohttp.WSMessageTypeError):
                 self._reset("websocket_unavailable")
                 raise

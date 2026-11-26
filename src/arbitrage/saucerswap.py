@@ -296,6 +296,8 @@ class SaucerSwap:
             number = int(block["number"], 16)
             block_hash = block["hash"]
             block_timestamp = int(block["timestamp"], 16)
+            if not isinstance(block_hash, str) or not re.fullmatch(r"0x[0-9a-f]{64}", block_hash):
+                raise ValueError("invalid block hash")
         except (KeyError, TypeError, ValueError):
             raise MarketDataError("invalid Hedera RPC block") from None
         tag = hex(number)
@@ -323,7 +325,6 @@ class SaucerSwap:
             )
             if (
                 mirror_data["number"] != number
-                or len(block_hash) != 66
                 or mirror_data["hash"][:66] != block_hash
                 or abs(block_timestamp - int(seconds)) > 2
             ):

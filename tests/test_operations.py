@@ -159,7 +159,10 @@ def kucoin_offline(monkeypatch):
 @pytest.mark.parametrize("control,reason", [
     ("emergency", Reason.WORKER_INACTIVE), ("deadline", Reason.SESSION_DEADLINE),
 ])
-def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, kucoin_offline, control, reason):
+@pytest.mark.parametrize("blocked_venue", ["dex", "kucoin"])
+def test_running_cycle_cancelled_and_transport_closed(
+    operations, monkeypatch, kucoin_offline, control, reason, blocked_venue,
+):
     original, config, clock = operations
 
     async def run():
@@ -167,8 +170,10 @@ def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, k
         cancelled = asyncio.Event()
         transports = []
 
-        async def hold(adapter):
+        async def hold(adapter, venue):
             transports.append(adapter.public.session)
+            if venue != blocked_venue:
+                return object()
             observed.set()
             try:
                 await asyncio.Future()
@@ -188,14 +193,21 @@ def test_running_cycle_cancelled_and_transport_closed(operations, monkeypatch, k
             except asyncio.CancelledError:
                 raise
 
-        monkeypatch.setattr("arbitrage.saucerswap.SaucerSwap.snapshot", hold)
-        monkeypatch.setattr("arbitrage.kucoin.KuCoin.snapshot", hold)
+        async def dex(adapter):
+            return await hold(adapter, "dex")
+
+        async def kucoin(adapter):
+            return await hold(adapter, "kucoin")
+
+        monkeypatch.setattr("arbitrage.saucerswap.SaucerSwap.snapshot", dex)
+        monkeypatch.setattr("arbitrage.kucoin.KuCoin.snapshot", kucoin)
         runtime = Runtime(original.directory, clock=original.clock, timer=original.timer, sleep=sleep)
         with runtime.owner():
             activation = runtime.activate("start", "worker-1", config)
             await asyncio.wait_for(runtime.run(*activation, asyncio.Event()), timeout=2)
         assert cancelled.is_set()
-        assert len(transports) == 2 and transports[0] is transports[1] and transports[0].closed
+        assert len(transports) == (1 if blocked_venue == "dex" else 2)
+        assert all(session is transports[0] and session.closed for session in transports)
         with runtime.storage.transaction() as tx:
             rows = tx._db.execute("SELECT payload FROM analysis_cycles").fetchall()
             assert len(rows) == 1 and reason.value in rows[0]["payload"]

@@ -96,10 +96,10 @@ config.simulation, public)` and share it across workers. Obtain a worker with
 Worker state persists. The caller owns the HTTP session, and worker state
 transitions reuse the existing connections.
 
-Each cycle reads one SaucerSwap pool and one KuCoin depth snapshot
-concurrently with a ten-second read deadline. Both paths must be complete and
+Each cycle completes one SaucerSwap pool snapshot before requesting one
+KuCoin depth snapshot, under a shared ten-second read deadline. Both paths must be complete and
 within the configured age limit of at most ten seconds. Both source and
-receipt skew must be at most two seconds. The DB records both directions and
+receipt skew must be at most ten seconds. The DB records both directions and
 their observations when available. The coordinator recomputes totals from
 reserves and visible depth to verify provenance and the configured CEX fee,
 then uses the already fee-adjusted quote totals for profit. BUY DEX maps
