@@ -1,0 +1,15 @@
+{"utc": "2026-11-26T08:50:19.967822+00:00", "stage": "start", "mode": "configured_proxy", "calibration_tinybars": 22762599}
+{"utc": "2026-11-26T08:50:20.027647+00:00", "stage": "mirror_fee", "tinybars_per_gas": 161}
+{"utc": "2026-11-26T08:50:20.071781+00:00", "stage": "rpc_scalar", "method": "eth_chainId", "result": "0x127"}
+{"utc": "2026-11-26T08:50:22.552342+00:00", "stage": "rpc_head", "number": "0x6208820", "source_timestamp_hex": "0x6b07f2c5"}
+{"utc": "2026-11-26T08:50:23.319354+00:00", "stage": "rpc_scalar", "method": "eth_gasPrice", "result": "0x176db7a6400"}
+{"utc": "2026-11-26T08:50:24.140243+00:00", "stage": "estimate_request", "side": "buy", "route_selector": "0x8803dbee"}
+{"utc": "2026-11-26T08:50:24.140443+00:00", "stage": "estimate_request", "side": "sell", "route_selector": "0x38ed1739"}
+{"utc": "2026-11-26T08:50:24.291729+00:00", "stage": "estimate_response", "side": "buy", "gas_hex": "0x1df10", "error_code": null, "error_category": null}
+{"utc": "2026-11-26T08:50:24.339067+00:00", "stage": "estimate_response", "side": "sell", "gas_hex": "0x1df23", "error_code": null, "error_category": null}
+{"utc": "2026-11-26T08:50:24.488542+00:00", "stage": "rpc_head", "number": "0x6208822", "source_timestamp_hex": "0x6b07f2ca"}
+{"utc": "2026-11-26T08:50:24.488757+00:00", "stage": "snapshot", "block": 102795296, "router_verified": true, "source_at": "2026-11-26T08:50:15.538463+00:00", "received_at": "2026-11-26T08:50:23.239956+00:00", "gross_micro_usdc": {"buy": 53962359, "sell": 53610473}}
+{"utc": "2026-11-26T08:50:24.488777+00:00", "stage": "cex_snapshot", "source": "rest", "source_at": "2026-11-26T08:50:20.298000+00:00", "received_at": "2026-11-26T08:50:20.372445+00:00", "coherent": false}
+{"utc": "2026-11-26T08:50:24.488785+00:00", "stage": "estimate_admission", "side": "buy", "verified": false, "reason": "route_estimate_head_changed"}
+{"utc": "2026-11-26T08:50:24.488793+00:00", "stage": "estimate_admission", "side": "sell", "verified": false, "reason": "route_estimate_head_changed"}
+{"utc": "2026-11-26T08:50:24.488799+00:00", "stage": "finish", "verified_count": 0, "coherent_cex": false}

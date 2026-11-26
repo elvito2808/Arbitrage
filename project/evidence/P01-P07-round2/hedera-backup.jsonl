@@ -1,0 +1,3 @@
+{"utc": "2026-11-26T08:49:24.394794+00:00", "event": "probe_start", "check": "H1", "mode": "environment"}
+{"utc": "2026-11-26T08:49:32.398939+00:00", "event": "probe_error", "category": "Unavailable"}
+{"utc": "2026-11-26T08:49:32.399004+00:00", "event": "probe_end", "success": false}
