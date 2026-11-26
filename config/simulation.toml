@@ -1,0 +1,22 @@
+schema_version = 1
+
+[simulation]
+mode = "simulation"
+trade_hbar = 1000
+duration_hours = 24
+worker_capacity = 3
+max_active_workers = 1
+cache_ttl_seconds = 10
+minimum_profit_usdt = "0.10"
+maximum_loss_usdt = "0.30"
+slippage_fraction = "0.005"
+gas_price_cap_multiple = "2"
+cex_fee_fraction = "0.001"
+usdc_usdt_parity = true
+
+[balances]
+dex_whbar = "50000"
+dex_usdc = "3000"
+dex_hbar = "1000"
+cex_hbar = "50000"
+cex_usdt = "3000"
