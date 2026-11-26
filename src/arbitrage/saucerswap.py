@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from .market_data import MAX_AGE, TRADE_UNITS, MarketDataError, PublicConnections, Unavailable, require_fresh
-from .models import Asset, MarketQuote, Side, Venue
+from .models import Asset, Identifier, MarketQuote, PositiveUnits, Record, Side, Venue
 
 PAIR = "0xdb34c1ef944883f0e5a2fc18b6c1978b088bd31d"
 USDC = "0x000000000000000000000000000000000006f89a"
@@ -42,6 +42,15 @@ def amounts(usdc: int, whbar: int) -> tuple[int, int]:
     return buy, sell
 
 
+class RouteGasEvidence(Record):
+    """Reference from a trusted route-specific estimation provider."""
+
+    id: Identifier
+    snapshot_id: Identifier
+    side: Side
+    execution_gas: PositiveUnits
+
+
 @dataclass(frozen=True)
 class GasEstimate:
     side: Side
@@ -50,6 +59,7 @@ class GasEstimate:
     execution_gas: int | None = None
     historical_proxy_gas: int = GAS_PROXY
     provenance: str = "P01 single historical swap, route and direction coverage unknown"
+    route_evidence: RouteGasEvidence | None = None
 
     @property
     def cost_valid(self) -> bool:

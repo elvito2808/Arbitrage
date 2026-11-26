@@ -1,0 +1,63 @@
+ARB-026–031 | P04 rev 1 | Agent 2 | 2026-11-26 UTC
+A cb23c4b08d2103aead243b59d6b66f325361a4bc, VERSION 1.0.0
+B 21c519a13a4bf1ab41ff999eda254558f99a7ed4, isolated work branch
+
+Initialization, exit 0
+git remote get-url origin
+git status --short --branch
+git rev-parse HEAD
+git ls-remote origin refs/heads/main refs/heads/agent-2/arb-026-031
+gh api repos/elvito2808/Arbitrage --jq '{full_name,default_branch,permissions}'
+B main matched the authorized baseline. The publication branch was absent.
+GitHub reported pull and push permission. Pinned sources, governance, task,
+role, reports and Agent 0 reviews were read. No original module attachments
+were present in the runner library. Independent durable backup outstanding.
+
+Test commands and results
+- python3.12 -m venv <initial-path> and python -m pip install '.[test]' (0)
+- PYTHONPATH=src python -m pytest -q, baseline regression before P04 tests
+  (0, 53 passed, 3 opt-in skips)
+- PYTHONPATH=src python -m pytest -q, first acceptance run
+  (1, 82 passed, 1 failed, 3 opt-in skips)
+- PYTHONPATH=src python -m pytest -q, corrected acceptance run
+  (0, 83 passed, 3 opt-in skips)
+- python3.12 -m venv <fresh-path> (0)
+- python -V (0, Python 3.12.14)
+- python -m pip install '.[test]' (0, built and installed package)
+- python -m pip check (0, no broken requirements)
+- python -I -c 'import arbitrage.coordinator, arbitrage.storage, arbitrage.kucoin, arbitrage.saucerswap' (0)
+- python -m pytest without PYTHONPATH (0, 85 passed, 3 opt-in skips)
+- python -m pip install --no-deps . (0, rebuilt after crossed-book validation
+  and deadline fixture additions). Repeated pip check and isolated imports
+  (0 each). Final python -m pytest (0, 87 passed, 3 opt-in skips in 0.71s)
+- git diff --cached --check and authorized-path / credential-pattern scan (0)
+
+Acceptance attempts
+- ARB-026/027/028/029/031 first acceptance execution passed.
+- ARB-030 attempt 1 failed on the expected stressed-profit fixture only.
+  With buy 52.761762 and sell 52.898262, stressed buy is 53.025571
+  and stressed sell is 52.633770. Subtracting gas 0.026500 yields
+  -0.418301 USDT. The previous expectation was -0.418893. Attempt 2
+  corrected the fixture and passed. No change to the rounding algorithm.
+- Public smoke was optional and not run in P04. The three opt-in checks
+  were skipped. The prior P03 live KuCoin WS check remains blocked.
+
+Deterministic results
+- Same-market fixtures cover both 1,000 HBAR directions. BUY DEX quotes
+  52.761762 USDC and 53.746200 net USDT at the opposite venue, giving
+  0.984438 indicative USDT. With unknown P03 gas both directions were
+  market_candidate and had no net profit or eligible outcome.
+- Synthetic gas fixture at 250,000 gas and 2e12 weibars/gas cap gave
+  a 50,000,000 tinybar budget. BUY DEX fixture net 0.957488 USDT and
+  separately configured SELL DEX fixture net 1.141217 USDT.
+- Net 0.099999 and 0.100000 rejected under the threshold. Net 0.100001
+  accepted with verified synthetic costs and zero configured slippage to
+  isolate this boundary. The default slippage stress is tested separately.
+- Wrong gas source, gas proxy/view values, gas outside cap, stale/skewed
+  reads, crossed book, incomplete depth and reserved balance rejected.
+- A conflicting snapshot insert rolled back the cycle and companion ID.
+  Competing coordinators shared one slot. Restart retained deduplication.
+  Migration preserved v1 worker and balances. Cancellation freed the slot
+  while keeping its network interval, and an expired owner was fenced.
+- No real/simulated swap or order, wallet, credential, broadcast, deployment,
+  owner-side execution, or balance mutation by the coordinator.

@@ -109,13 +109,28 @@ def book_from(data: dict, received: datetime, base_step: Fraction, price_step: F
             if entry.price % price_step or entry.quantity % base_step:
                 raise MarketDataError("KuCoin order book disagrees with market increments")
             side.append(entry)
-        prices = [entry.price for entry in side]
-        if prices != sorted(set(prices), reverse=key == "bids"):
-            raise MarketDataError("KuCoin depth order or duplicate level")
         sides.append(tuple(side))
     bids, asks = sides
-    crossed(bids[0], asks[0])
-    return Book(sequence(data.get("sequence")), millis(data.get("time")), received, bids, asks)
+    book = Book(sequence(data.get("sequence")), millis(data.get("time")), received, bids, asks)
+    validate_book(book)
+    return book
+
+
+def validate_book(book: Book) -> None:
+    for side, descending in ((book.bids, True), (book.asks, False)):
+        if not 0 < len(side) <= 20 or any(
+            type(entry.price) is not Fraction or type(entry.quantity) is not Fraction
+            or min(entry.price, entry.quantity) <= 0 for entry in side
+        ):
+            raise MarketDataError("invalid KuCoin depth side")
+        prices = [entry.price for entry in side]
+        if prices != sorted(set(prices), reverse=descending):
+            raise MarketDataError("KuCoin depth order or duplicate level")
+    crossed(book.bids[0], book.asks[0])
+
+
+class InsufficientDepth(MarketDataError):
+    """Visible depth cannot cover the requested size."""
 
 
 def priced_units(levels: tuple[Level, ...], side: Side, fee: Fraction) -> int:
@@ -128,7 +143,7 @@ def priced_units(levels: tuple[Level, ...], side: Side, fee: Fraction) -> int:
         if not remaining:
             break
     if remaining:
-        raise MarketDataError("visible KuCoin depth cannot cover 1,000 HBAR")
+        raise InsufficientDepth("visible KuCoin depth cannot cover 1,000 HBAR")
     total = gross * (1 + fee if side == Side.BUY else 1 - fee) * 10**6
     units = -(-total.numerator // total.denominator) if side == Side.BUY else int(total)
     if units <= 0:

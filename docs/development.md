@@ -14,7 +14,7 @@ Load `config/simulation.toml` with `arbitrage.config.load_config`. Version 1 fix
 
 Initialize a SQLite file with `Storage(path).initialize()`. Use a path in private runtime storage. Use `Storage.transaction()` for a complete unit of work. An exception escaping the context rolls back the transaction. Initialize opening balances with `tx.seed_balances(config.balances.as_balances())`. Seeding preserves existing holdings. Holdings form a shared simulated portfolio. HBAR and WHBAR use eight decimal places. USDC uses six, and simulated USDT uses six as an accounting convention.
 
-Persist worker, opportunity and execution records with the corresponding transaction methods. Opportunity records preserve requested quotes while the execution record holds separate fills. Reservation and ledger writes update balances inside the same SQLite transaction. Keep the transaction open only for database work. The experiment start and deadline are immutable per ID, so reopening the file preserves the deadline. The schema version uses SQLite `user_version`. Version 0 initializes version 1 and unsupported versions fail explicitly.
+Persist worker, opportunity and execution records with the corresponding transaction methods. Opportunity records preserve requested quotes while the execution record holds separate fills. Reservation and ledger writes update balances inside the same SQLite transaction. Keep the transaction open only for database work. The experiment start and deadline are immutable per ID, so reopening the file preserves the deadline. The schema version uses SQLite `user_version`. Version 0 initializes the current schema and unsupported versions fail explicitly.
 
 Use `OperationalLog.emit()` with its event and level enums. Caller metadata is discarded. The bounded producer returns false for rejected or dropped events. A consumer can retrieve JSON lines with `take()`. Financial ledger entries remain in SQLite. This phase provides the queue and event format, so a later lifecycle phase can attach the output sink.
 
@@ -74,3 +74,50 @@ Run `python -m pytest` for offline verification. The separately opted-in
 `ARB_PUBLIC_SMOKE=1 python -m pytest -s tests/test_market_smoke.py` bounds each
 public probe to 20 seconds. Service failures in the opt-in run are reported
 individually. The historical 2026-11-26 prices are offline fixtures.
+
+## Opportunity analysis
+
+Initialize `Storage` before creating an `OpportunityCoordinator`. Schema version
+2 upgrades version 1 in one transaction and retains existing balances,
+reservations, workers and records. Seed virtual balances using the existing
+P02 API. Create a coordinator with `OpportunityCoordinator.from_public(storage,
+config.simulation, public)` and share it across workers. Obtain a worker with
+`coordinator.worker("hedera-main")`, call `worker.start()`, await
+`worker.analyze()` for one cycle, and call `worker.stop()` on shutdown.
+Worker state persists. The caller owns the HTTP session, and worker state
+transitions reuse the existing connections.
+
+Each cycle reads one SaucerSwap pool and one KuCoin REST depth snapshot
+concurrently with a ten-second read deadline. Both paths must be complete and
+within the configured age limit of at most ten seconds. Both source and
+receipt skew must be at most two seconds. The DB records both directions and
+their observations when available. The coordinator recomputes totals from
+reserves and visible depth to verify provenance and the configured CEX fee,
+then uses the already fee-adjusted quote totals for profit. BUY DEX maps
+WHBAR acquired on Hedera to HBAR sold on KuCoin. SELL DEX reverses the legs.
+USDC/USDT use 1:1 simulation parity.
+
+Without route-specific gas evidence, records with usable quotes are
+indicative market candidates or balance misses. Verified gas input would
+require evidence bound to the pool snapshot, swap direction and gas units.
+The risk calculation uses the capped gas-price scenario and rounds the HBAR
+budget up to tinybars. Gas is valued at the fee-free 1,000 HBAR ask average
+from the same fresh book, rounded up to a simulated USDT micro-unit. The
+coordinator requires quoted net profit strictly above the floor and stresses
+both legs adversely at the configured slippage limit for the maximum-loss
+test. It checks available virtual balances including the stressed buy amount
+and gas budget. Configuration can tighten the approved 0.10 USDT profit
+floor, 0.30 USDT loss limit, 0.5% slippage and 2× gas-price ceiling.
+
+Call `Storage.transaction()` only for short synchronous operations. The cycle
+claims a network slot and commits before any market await. The slot limits
+starts to one per 15 seconds per network on the shared SQLite database,
+including across worker handoffs. This is a local request budget. The
+underlying adapters still apply provider rate limits and bounded retries.
+The slot expires after 20 seconds to recover from interrupted processes.
+A separate transaction rechecks the worker, lease and snapshot clocks, then
+commits both evaluations and individual source IDs together. Duplicates
+produce a reason-coded record without consuming the other source ID.
+Worker states, analysis records and deduplication are scoped to the shared
+database file. An eligible analysis is a point-in-time result. Balance
+reservations, execution and worker process supervision belong to later phases.

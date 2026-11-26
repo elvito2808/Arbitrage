@@ -193,3 +193,85 @@ class Experiment(Record):
         if self.deadline_at - self.started_at != EXPERIMENT_DURATION:
             raise ValueError("deadline must be 24 hours after the start")
         return self
+
+
+class EvaluationStatus(StrEnum):
+    MARKET_CANDIDATE = "market_candidate"
+    INSUFFICIENT_DATA = "insufficient_data"
+    REJECTED = "rejected"
+    ELIGIBLE = "eligible_for_simulation"
+
+
+class Reason(StrEnum):
+    WORKER_INACTIVE = "worker_inactive"
+    CYCLE_BUSY = "cycle_busy"
+    CYCLE_EXPIRED = "cycle_expired"
+    NETWORK_QUOTA = "network_quota"
+    MARKET_UNAVAILABLE = "market_unavailable"
+    INVALID_MARKET = "invalid_market"
+    STALE_OR_INVALID_CLOCK = "stale_or_invalid_clock"
+    CROSS_VENUE_SKEW = "cross_venue_skew"
+    PROVENANCE_MISMATCH = "provenance_mismatch"
+    INSUFFICIENT_DEPTH = "insufficient_depth"
+    DUPLICATE_SNAPSHOT = "duplicate_snapshot"
+    GAS_UNKNOWN = "gas_unknown"
+    GAS_INVALID = "gas_invalid"
+    INSUFFICIENT_BALANCE = "insufficient_balance"
+    MAXIMUM_LOSS = "maximum_loss"
+    PROFIT_THRESHOLD = "profit_threshold"
+
+
+class Evaluation(Record):
+    direction: Direction
+    status: EvaluationStatus
+    reason: Reason | None = None
+    requested_dex: MarketQuote | None = None
+    requested_cex: MarketQuote | None = None
+    indicative_profit_usdt: Exact | None = None
+    gas_cost_usdt: Exact | None = None
+    net_profit_usdt: Exact | None = None
+    stressed_profit_usdt: Exact | None = None
+    gas_evidence_id: Identifier | None = None
+    gas_budget_tinybars: PositiveUnits | None = None
+
+    @model_validator(mode="after")
+    def validate_status(self) -> "Evaluation":
+        if self.status == EvaluationStatus.ELIGIBLE:
+            if self.reason is not None or any(value is None for value in (
+                self.requested_dex, self.requested_cex, self.indicative_profit_usdt,
+                self.gas_cost_usdt, self.net_profit_usdt, self.stressed_profit_usdt,
+                self.gas_evidence_id, self.gas_budget_tinybars,
+            )):
+                raise ValueError("eligibility requires complete evaluated costs")
+        elif self.reason is None:
+            raise ValueError("noneligible evaluation requires a reason")
+        return self
+
+
+class SnapshotObservation(Record):
+    id: Identifier
+    source_at: Timestamp
+    received_at: Timestamp
+
+
+class AnalysisCycle(Record):
+    id: Identifier
+    worker_id: Identifier
+    observed_at: Timestamp
+    dex_snapshot: SnapshotObservation | None = None
+    cex_snapshot: SnapshotObservation | None = None
+
+    @property
+    def dex_snapshot_id(self) -> str | None:
+        return self.dex_snapshot.id if self.dex_snapshot else None
+
+    @property
+    def cex_snapshot_id(self) -> str | None:
+        return self.cex_snapshot.id if self.cex_snapshot else None
+    evaluations: tuple[Evaluation, Evaluation]
+
+    @model_validator(mode="after")
+    def validate_directions(self) -> "AnalysisCycle":
+        if tuple(item.direction for item in self.evaluations) != tuple(Direction):
+            raise ValueError("a cycle must record both directions in order")
+        return self
