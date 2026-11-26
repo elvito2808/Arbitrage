@@ -14,7 +14,9 @@ import aiohttp
 from .market_data import MAX_AGE, TRADE_UNITS, MarketDataError, PublicConnections, Unavailable, require_fresh
 from .models import Asset, MarketQuote, Side, Venue
 
-SYMBOL = "HBAR-USDT"
+BASE_CURRENCY = "HBAR"
+QUOTE_CURRENCY = "USDT"
+SYMBOL = f"{BASE_CURRENCY}-{QUOTE_CURRENCY}"
 TOPIC = f"/market/ticker:{SYMBOL}"
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -179,6 +181,7 @@ class KuCoin:
 
     def _invalidate(self) -> None:
         self._generation += 1
+        self._increments = None
         self._book = None
 
     async def indicative_ticker(self) -> Ticker:
@@ -193,6 +196,10 @@ class KuCoin:
                 async with asyncio.timeout(9):
                     if self._increments is None:
                         data = await self.public.kucoin("symbol")
+                        if (data.get("symbol"), data.get("baseCurrency"), data.get("quoteCurrency")) != (
+                            SYMBOL, BASE_CURRENCY, QUOTE_CURRENCY,
+                        ):
+                            raise MarketDataError("KuCoin symbol identity mismatch")
                         base = exact(data.get("baseIncrement"))
                         price = exact(data.get("priceIncrement"))
                         quote = exact(data.get("quoteIncrement"))
