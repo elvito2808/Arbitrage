@@ -381,3 +381,28 @@ def test_market_deadline_records_miss(setup, monkeypatch):
     monkeypatch.setattr("arbitrage.coordinator.READ_DEADLINE", 0.01)
     monkeypatch.setattr(market, "snapshot", held)
     assert run(coordinator).evaluations[0].reason == Reason.MARKET_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_market_reads_are_sequential_dex_before_kucoin(setup, monkeypatch):
+    _, market, coordinator = setup
+    order = []
+    dex_snapshot = market.snapshot
+    cex_snapshot = market.cex.snapshot
+
+    async def read_dex():
+        order.append("dex:start")
+        result = await dex_snapshot()
+        order.append("dex:done")
+        return result
+
+    async def read_kucoin():
+        order.append("kucoin:start")
+        result = await cex_snapshot()
+        order.append("kucoin:done")
+        return result
+
+    monkeypatch.setattr(coordinator.dex, "snapshot", read_dex)
+    monkeypatch.setattr(coordinator.cex, "snapshot", read_kucoin)
+    await coordinator._read()
+    assert order == ["dex:start", "dex:done", "kucoin:start", "kucoin:done"]
