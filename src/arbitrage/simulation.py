@@ -346,11 +346,15 @@ class SimulationEngine(OpportunityCoordinator):
             now = self._now()
             if self._public_simulation:
                 evidence = request.gas.evidence
+                rpc = evidence.rpc if evidence is not None else None
                 dex = request.evaluation.requested_dex
-                if (evidence is None or dex is None or evidence.side != dex.side
+                if (rpc is None or dex is None or evidence.side != dex.side
                         or evidence.snapshot_id != dex.snapshot_id
                         or evidence.execution_gas != request.gas.route_gas
-                        or evidence.id != request.evaluation.gas_evidence_id):
+                        or evidence.id != request.evaluation.gas_evidence_id
+                        or rpc.side != evidence.side or rpc.estimated_gas != request.gas.route_gas
+                        or rpc.estimated_at != request.gas.observed_at
+                        or rpc.gas_price_weibars != request.gas.price_weibars[0]):
                     self._append(tx, trade_id, Event(
                         id=f"sim:{trade_id}:review", at=now,
                         remaining=self._remaining(tx, request), note="gas provenance mismatch",
