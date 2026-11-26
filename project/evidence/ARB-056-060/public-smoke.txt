@@ -1,0 +1,8 @@
+..F                                                                      [100%]
+=================================== FAILURES ===================================
+_____________________ test_public_market_smoke[kucoin_ws] ______________________
+KuCoin WS reconnect limit reached (TimeoutError)
+
+During handling of the above exception, another exception occurred:
+kucoin_ws public smoke blocked: KuCoin WS reconnect limit reached (TimeoutError)
+1 failed, 2 passed in 19.57s
