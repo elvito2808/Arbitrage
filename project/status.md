@@ -2,21 +2,21 @@
 
 **Governance:** approved ARB-RM-001 v1.0.0; owner SIMULATION ONLY, zero added cost, no owner-local execution, independently durable backup deferred (NOT VERIFIED). Framework A `elvito2808/Agent-Management-Framework` approved read-only v1.0.0 pin `cb23c4b08d2103aead243b59d6b66f325361a4bc`. B `elvito2808/Arbitrage`, canonical `main`; original authorized baseline `1baff43168e7d17060d44a49d10225857b87a0af`.
 
-**Accepted bounded milestones:** P01 PR #1 merge `b4ed121aac1249352dccf4a5d4353765e66dfee5` (public feasibility); P02 PR #4 merge `633ec6573e650bf7846621aea797f2223b3ccae2` (Python/SQLite base); P03 PR #6 merge `bb10fae5a76669d2fdfb6ddb8933256c066c9997` (REST/DEX prices); P04 PR #8 merge `3ea6cd1a62b3f471e614f4eb008eb7aff70a2cfb` (read-only opportunities); P05 PR #10 specialist head `cb748805eaacb33fafe0ce57a75b70e67da14cde` merged `9fb2a938fecac35fb2a44c536c4ef6a6860f5109` (deterministic **fixture-only** virtual execution and recovery). Agent 0 reviews at project/evidence/ARB-005-011/, ARB-012-017/, ARB-018-025/, ARB-026-031/, ARB-032-039/. P05 evidence: **116 specialist-run Python3.12 tests PASS, 3 opt-in network skips**; code/tests inspected by Agent 0, not independently run by Agent 0; no GitHub CI statuses.
+**Accepted bounded milestones:** P01 PR #1 `b4ed121aac1249352dccf4a5d4353765e66dfee5`; P02 PR #4 `633ec6573e650bf7846621aea797f2223b3ccae2`; P03 PR #6 `bb10fae5a76669d2fdfb6ddb8933256c066c9997`; P04 PR #8 `3ea6cd1a62b3f471e614f4eb008eb7aff70a2cfb`; P05 PR #10 `9fb2a938fecac35fb2a44c536c4ef6a6860f5109`; P06 PR #12 `602ea3f54282201a88c629818176d1bb5366ee31`. P06 was merged by Agent 0 after static code/evidence review. Specialist reports Python 3.12.14 clean install, pip check, imports, 133 tests passed and 3 optional network checks skipped. Agent 0 did not independently rerun the test suite; no CI checks were present. Review bounded to P06 lifecycle, CLI, monitoring, timer, Excel export and inert systemd template.
 
-| Phase | Task status | Verification status | Next |
+| Phase | Tasks | State | Acceptance / limitations |
 |---|---|---|---|
-| P00 ARB-001–005 | Governance complete, backup owner-deferred | Temporary restore evidence inspected, independent durable backup UNVERIFIED | Retain accepted risk |
-| P01 ARB-006–011 | Done | ACCEPTED bounded feasibility, no 24h endurance | Dependency passed |
-| P02 ARB-012–017 | Done | ACCEPTED foundational Python/SQLite | Dependency passed |
-| P03 ARB-018–025 | Done | ACCEPTED read-only public market prices; live WS/gas UNKNOWN | Carry fail-closed gate |
-| P04 ARB-026–031 | Done | ACCEPTED analysis/rejections, zero eligible with real P03 unknown gas | Carry fail-closed gate |
-| P05 ARB-032–039 | Done | ACCEPTED deterministic fixture-only virtual ledger/trade/recovery, **public-data simulation BLOCKED** | P06 allowed for offline tooling only |
-| P06 ARB-040–046 | Task rev1 staged at `project/tasks/ARB-040-046.md` | NOT STARTED | Owner-supervised Agent 1 dispatch after management PR merge |
-| P07–P09 | Not assigned | Not verified | Future gates and separate server authorization |
+| P00 | ARB-001–005 | Done | Governance and temporary backup evidence; durable independent backup UNVERIFIED, owner-deferred |
+| P01 | ARB-006–011 | Done | Bounded public-data feasibility accepted |
+| P02 | ARB-012–017 | Done | Core Python/SQLite foundations accepted |
+| P03 | ARB-018–025 | Done | Read-only REST/DEX market pricing accepted; live WS and route gas unverified |
+| P04 | ARB-026–031 | Done | Analysis and rejection recording accepted; no eligibility with real unknown gas |
+| P05 | ARB-032–039 | Done | Deterministic fixture-only virtual execution accepted; public-data simulation BLOCKED |
+| P06 | ARB-040–046 | Done | Lifecycle/CLI/monitoring/deadline/Excel and inert service template accepted; no deployment or 24h run |
+| P07–P09 | Not yet assigned | Planned | Require task definitions, gates and owner supervision |
 
-**Outstanding:** independently validated route-specific execution gas and trust provenance for both DEX directions, live KuCoin public WS from Codex runner, continuous free API behavior over 24h, physical power loss, real-data trading effectiveness, independent A+B durable backup. No server deployment, real orders, actual tokens, keys, signed transactions, paid tools or always-on execution approved.
+**Outstanding:** independently trusted route-specific gas for both DEX directions, live KuCoin public WS, continuous provider availability/rate limits over 24h, real-data opportunity validity, physical power-loss recovery, deployed systemd behavior, independent durable backup (owner deferred). No real trades, orders, signing, wallets, paid services, server deployment or always-on process authorized.
 
-**P06 hard rule:** May create safe CLI, read-only runtime/monitoring, stop/pause/restart, private Excel reports, 24h boundary logic and inert systemd templates without executing them on user systems. Must NOT enable real-public-data simulated fills while gas trust is unavailable. Synthetic HMAC fixture is a test-only mechanism and must never be surfaced as production configuration. No 24h live experiment started.
+**Critical gate:** real public-data simulated executions remain BLOCKED until route-specific gas and its trust/provenance are independently verified. P05 test-only HMAC fixture validation is never production evidence. P06 has not started an actual 24h experiment. No owner-local machine execution required or performed.
 
-**Recovery:** CP-001 through CP-006, PR #10 and review, exact accepted merge SHAs, project/backups.md. No running bot or real trade. Owner manually relays Codex assignment on exact verified main after management PR merge.
+**Recovery:** CP-001 through CP-007, project/backups.md, PRs #1, #4, #6, #8, #10, #12 and exact merge SHAs. No active bot or in-flight trade.
