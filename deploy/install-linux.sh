@@ -6,7 +6,7 @@ release=fca1a7c657b083c3698693b947cd2e788a7bceab
 base="$HOME/.local/share/arbitrage"
 state="$base/state"
 src="$base/releases/$release"
-if ! command -v python3.12 >/dev/null || ! python3.12 -m venv --help >/dev/null || ! command -v git >/dev/null; then
+if ! command -v python3.12 >/dev/null || ! python3.12 -c 'import ensurepip' >/dev/null 2>&1 || ! command -v git >/dev/null; then
   command -v apt-get >/dev/null && command -v sudo >/dev/null || { echo "Install Git and Python 3.12 with venv using your distribution package manager." >&2; exit 1; }
   sudo apt-get update
   sudo apt-get install -y git python3.12 python3.12-venv ca-certificates
