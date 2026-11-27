@@ -1,0 +1,16 @@
+{
+  "mode": "offline synthetic",
+  "outcome": "unknown",
+  "raw_fee_units": 0,
+  "holds": {
+    "cex.HBAR": 100000000000
+  },
+  "ledger": {
+    "dex.HBAR": -24450000,
+    "dex.WHBAR": 100000000000,
+    "dex.USDC": -52761762
+  },
+  "excel_fee": "unknown",
+  "console_fee": "0.000000",
+  "status": "manual_review"
+}

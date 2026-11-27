@@ -1,0 +1,10 @@
+{
+  "mode": "offline synthetic",
+  "counts": {
+    "analysis_cycles": 0,
+    "simulated_trades": 0,
+    "reservations": 0,
+    "ledger": 0
+  },
+  "readiness": "STARTUP_BLOCKED"
+}

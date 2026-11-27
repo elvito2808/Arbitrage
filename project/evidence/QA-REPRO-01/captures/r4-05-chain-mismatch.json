@@ -1,0 +1,21 @@
+{
+  "mode": "offline synthetic",
+  "readiness": "STARTUP_BLOCKED",
+  "reason": "market_identity_mismatch",
+  "hedera": {
+    "outcome": "UNKNOWN",
+    "reason": null,
+    "at": null
+  },
+  "snapshots": {
+    "outcome": "FAIL",
+    "reason": "market_identity_mismatch",
+    "at": "2026-11-26T01:30:15+00:00"
+  },
+  "counts": {
+    "analysis_cycles": 0,
+    "simulated_trades": 0,
+    "reservations": 0,
+    "ledger": 0
+  }
+}

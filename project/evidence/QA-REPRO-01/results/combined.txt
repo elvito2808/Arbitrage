@@ -1,0 +1,58 @@
+........................................................................ [ 22%]
+........................................................................ [ 45%]
+...............................................................sss...... [ 68%]
+........................................................................ [ 91%]
+....................FF.FFFF                                              [100%]
+=================================== FAILURES ===================================
+_______________ test_qa_r4_01_direct_requires_readiness[outage] ________________
+project/evidence/QA-REPRO-01/test_rc1_defects.py:81: in test_qa_r4_01_direct_requires_readiness
+    assert actual == dict.fromkeys(actual, 0)
+E   AssertionError: assert {'analysis_cy..., 'ledger': 0} == {'analysis_cy..., 'ledger': 0}
+E
+E     Omitting 3 identical items, use -vv to show
+E     Differing items:
+E     {'analysis_cycles': 1} != {'analysis_cycles': 0}
+E     Use -v to get more diff
+_____________ test_qa_r4_01_direct_requires_readiness[profitable] ______________
+project/evidence/QA-REPRO-01/test_rc1_defects.py:81: in test_qa_r4_01_direct_requires_readiness
+    assert actual == dict.fromkeys(actual, 0)
+E   AssertionError: assert {'analysis_cy..., 'ledger': 0} == {'analysis_cy..., 'ledger': 0}
+E
+E     Omitting 1 identical items, use -vv to show
+E     Differing items:
+E     {'simulated_trades': 1} != {'simulated_trades': 0}
+E     {'reservations': 3} != {'reservations': 0}
+E     {'analysis_cycles': 1} != {'analysis_cycles': 0}
+E     Use -v to get more diff
+___________________ test_qa_r4_02_operational_worker_unready ___________________
+project/evidence/QA-REPRO-01/test_rc1_defects.py:107: in test_qa_r4_02_operational_worker_unready
+    assert all(item["worker"] != "running" for item in observed), observed
+E   AssertionError: [{'readiness': 'WAITING_RETRY', 'intent': 'running', 'worker': <WorkerState.RUNNING: 'running'>}, {'readiness': 'WAITI...UNNING: 'running'>}, {'readiness': 'STARTUP_BLOCKED', 'intent': 'running', 'worker': <WorkerState.RUNNING: 'running'>}]
+E   assert False
+E    +  where False = all(<generator object test_qa_r4_02_operational_worker_unready.<locals>.<genexpr> at 0x7f51ac548a00>)
+___________ test_qa_r4_03_preserve_valid_data_when_sell_gas_invalid ____________
+project/evidence/QA-REPRO-01/test_rc1_defects.py:154: in test_qa_r4_03_preserve_valid_data_when_sell_gas_invalid
+    assert all(item["dex_quote_units"] and item["cex_quote_units"]
+E   AssertionError: [{'direction': <Direction.BUY_DEX: 'buy_dex'>, 'reason': <Reason.GAS_INVALID: 'gas_invalid'>, 'dex_quote_units': None,...EX: 'sell_dex'>, 'reason': <Reason.GAS_INVALID: 'gas_invalid'>, 'dex_quote_units': None, 'cex_quote_units': None, ...}]
+E   assert False
+E    +  where False = all(<generator object test_qa_r4_03_preserve_valid_data_when_sell_gas_invalid.<locals>.<genexpr> at 0x7f51ac54bac0>)
+___________________ test_qa_r4_04_unknown_cex_fee_is_unknown ___________________
+project/evidence/QA-REPRO-01/test_rc1_defects.py:189: in test_qa_r4_04_unknown_cex_fee_is_unknown
+    assert "fee_usdt=UNKNOWN" in line, line
+E   AssertionError: [01:30:31.000] INFO [SIMULATION] SIMULATED execution worker=worker-1 cycle=9ae86f86d2d944cf9a1736f050dbab02 session=c654f79f7a624e3bbe16fe4d0d43ee44 execution=9ae86f86d2d944cf9a1736f050dbab02 attempt=1 filled_hbar=UNKNOWN fill_usdc=UNKNOWN fill_usdt=UNKNOWN fee_usdt=0.000000 gas_hbar=UNKNOWN dex.WHBAR=0.00000000 dex.USDC=0.000000 dex.HBAR=0.00000000 cex.HBAR=1000.00000000 cex.USDT=0.000000 venue=cex phase=result result=unknown recorded_at=2026-11-26T01:30:31+00:00
+E   assert 'fee_usdt=UNKNOWN' in '[01:30:31.000] INFO [SIMULATION] SIMULATED execution worker=worker-1 cycle=9ae86f86d2d944cf9a1736f050dbab02 session=c...0 cex.HBAR=1000.00000000 cex.USDT=0.000000 venue=cex phase=result result=unknown recorded_at=2026-11-26T01:30:31+00:00'
+_______________ test_qa_r4_05_chain_mismatch_fails_hedera_check ________________
+project/evidence/QA-REPRO-01/test_rc1_defects.py:202: in test_qa_r4_05_chain_mismatch_fails_hedera_check
+    assert (check["outcome"], check["reason"], bool(check["at"])) == ("FAIL", "market_identity_mismatch", True)
+E   AssertionError: assert ('UNKNOWN', None, False) == ('FAIL', 'mar...smatch', True)
+E
+E     At index 0 diff: 'UNKNOWN' != 'FAIL'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED project/evidence/QA-REPRO-01/test_rc1_defects.py::test_qa_r4_01_direct_requires_readiness[outage]
+FAILED project/evidence/QA-REPRO-01/test_rc1_defects.py::test_qa_r4_01_direct_requires_readiness[profitable]
+FAILED project/evidence/QA-REPRO-01/test_rc1_defects.py::test_qa_r4_02_operational_worker_unready
+FAILED project/evidence/QA-REPRO-01/test_rc1_defects.py::test_qa_r4_03_preserve_valid_data_when_sell_gas_invalid
+FAILED project/evidence/QA-REPRO-01/test_rc1_defects.py::test_qa_r4_04_unknown_cex_fee_is_unknown
+FAILED project/evidence/QA-REPRO-01/test_rc1_defects.py::test_qa_r4_05_chain_mismatch_fails_hedera_check
+6 failed, 306 passed, 3 skipped in 15.00s

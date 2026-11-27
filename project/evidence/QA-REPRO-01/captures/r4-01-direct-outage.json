@@ -1,0 +1,14 @@
+{
+  "mode": "offline synthetic",
+  "counts": {
+    "analysis_cycles": 1,
+    "simulated_trades": 0,
+    "reservations": 0,
+    "ledger": 0
+  },
+  "reasons": [
+    "market_unavailable",
+    "market_unavailable"
+  ],
+  "estimator_calls": 0
+}

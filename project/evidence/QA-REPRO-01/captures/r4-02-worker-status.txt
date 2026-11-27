@@ -1,0 +1,27 @@
+OFFLINE SYNTHETIC QA-REPRO-01 EVIDENCE
+[01:30:15.000] INFO [SYSTEM] Starting SIMULATION ONLY (2026-11-26 UTC); foreground logger active; real trading disabled worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc
+[01:30:15.000] INFO [CONFIG] Applied simulation configuration worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc capacity=3 active_limit=1 chain_id=295 trade_hbar=1000 profit_usdt=0.1 loss_usdt=0.3 slippage=0.005 fee=0.001 gas_cap=2 ttl_seconds=10 interval_seconds=15 network=hedera:295 market=HBAR-USDT dex_market=WHBAR-USDC mode=simulation parity=True deadline=2026-11-27T01:30:15+00:00
+[01:30:15.000] INFO [HEALTH] STARTING worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc delay_seconds=UNKNOWN attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc check=configuration outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc check=storage outcome=PASS attempt=1
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc previous=UNKNOWN delta=UNKNOWN total=50000.00000000 reserved=0.00000000 available=50000.00000000 holding=dex.WHBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc previous=UNKNOWN delta=UNKNOWN total=3000.000000 reserved=0.000000 available=3000.000000 holding=dex.USDC phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc previous=UNKNOWN delta=UNKNOWN total=1000.00000000 reserved=0.00000000 available=1000.00000000 holding=dex.HBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc previous=UNKNOWN delta=UNKNOWN total=50000.00000000 reserved=0.00000000 available=50000.00000000 holding=cex.HBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc previous=UNKNOWN delta=UNKNOWN total=3000.000000 reserved=0.000000 available=3000.000000 holding=cex.USDT phase=opening reconciliation=PASS
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc check=recovery outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] PREFLIGHT_CHECKING worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc delay_seconds=UNKNOWN attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc check=snapshots outcome=UNKNOWN diagnostic=provider_timeout attempt=1
+[01:30:15.000] WARNING [HEALTH] WAITING_RETRY worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc delay_seconds=15.0 diagnostic=provider_timeout attempt=1 next_attempt_at=2026-11-26T01:30:30+00:00
+[01:30:30.000] INFO [HEALTH] PREFLIGHT_CHECKING worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc delay_seconds=UNKNOWN attempt=2
+[01:30:30.000] INFO [HEALTH] Readiness check worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc check=snapshots outcome=UNKNOWN diagnostic=provider_timeout attempt=2
+[01:30:30.000] WARNING [HEALTH] WAITING_RETRY worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc delay_seconds=15.0 diagnostic=provider_timeout attempt=2 next_attempt_at=2026-11-26T01:30:45+00:00
+[01:30:45.000] INFO [HEALTH] PREFLIGHT_CHECKING worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc delay_seconds=UNKNOWN attempt=3
+[01:30:45.000] INFO [HEALTH] Readiness check worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc check=snapshots outcome=UNKNOWN diagnostic=provider_timeout attempt=3
+[01:30:45.000] WARNING [HEALTH] WAITING_RETRY worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc delay_seconds=20.0 diagnostic=provider_timeout attempt=3 next_attempt_at=2026-11-26T01:31:05+00:00
+[01:31:05.000] INFO [HEALTH] PREFLIGHT_CHECKING worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc delay_seconds=UNKNOWN attempt=4
+[01:31:05.000] INFO [HEALTH] Readiness check worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc check=snapshots outcome=UNKNOWN diagnostic=provider_timeout attempt=4
+[01:31:05.000] ERROR [HEALTH] STARTUP_BLOCKED worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc delay_seconds=UNKNOWN diagnostic=provider_timeout attempt=4 retry_exhausted=True
+[01:31:05.000] INFO [SYSTEM] worker_state worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc
+[01:31:05.000] INFO [SYSTEM] Session lifecycle worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc intent=startup_blocked
+[01:31:05.000] INFO [SYSTEM] Session summary worker=worker-1 session=b46454838ee94e3c85599b8cc5805fdc cycles=0 admissions=0 filled=0 failed=0 incomplete=0 manual_review=0 active=0 cycle_errors=0 console_drops=0

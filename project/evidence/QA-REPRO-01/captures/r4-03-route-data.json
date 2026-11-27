@@ -1,0 +1,107 @@
+{
+  "mode": "offline synthetic",
+  "evaluations": [
+    {
+      "direction": "buy_dex",
+      "reason": "gas_invalid",
+      "dex_quote_units": null,
+      "cex_quote_units": null,
+      "indicative_usdt": null,
+      "gas_observed": false
+    },
+    {
+      "direction": "sell_dex",
+      "reason": "gas_invalid",
+      "dex_quote_units": null,
+      "cex_quote_units": null,
+      "indicative_usdt": null,
+      "gas_observed": false
+    }
+  ],
+  "structured_events": [
+    {
+      "at": "2026-11-26T01:30:30+00:00",
+      "event": "evaluation",
+      "level": "info",
+      "worker": "worker-1",
+      "cycle": "e03370041b7b477a8bce847b77b5e375",
+      "session": "da01689553754bf69e3498f49b16c9d0",
+      "number": 1,
+      "trade_hbar": null,
+      "dex_usdc": null,
+      "cex_usdt": null,
+      "gas_observed_hbar": null,
+      "gas_observed_usdt": null,
+      "gas_capped_hbar": null,
+      "gas_capped_usdt": null,
+      "indicative_usdt": null,
+      "net_usdt": null,
+      "stressed_usdt": null,
+      "direction": "buy_dex",
+      "status": "insufficient_data",
+      "reason": "gas_invalid",
+      "source": "rest",
+      "dex_side": null,
+      "cex_side": null,
+      "admission": "not_eligible",
+      "guard": null
+    },
+    {
+      "at": "2026-11-26T01:30:30+00:00",
+      "event": "evaluation",
+      "level": "info",
+      "worker": "worker-1",
+      "cycle": "e03370041b7b477a8bce847b77b5e375",
+      "session": "da01689553754bf69e3498f49b16c9d0",
+      "number": 1,
+      "trade_hbar": null,
+      "dex_usdc": null,
+      "cex_usdt": null,
+      "gas_observed_hbar": null,
+      "gas_observed_usdt": null,
+      "gas_capped_hbar": null,
+      "gas_capped_usdt": null,
+      "indicative_usdt": null,
+      "net_usdt": null,
+      "stressed_usdt": null,
+      "direction": "sell_dex",
+      "status": "insufficient_data",
+      "reason": "gas_invalid",
+      "source": "rest",
+      "dex_side": null,
+      "cex_side": null,
+      "admission": "not_eligible",
+      "guard": null
+    }
+  ],
+  "counts": {
+    "analysis_cycles": 1,
+    "simulated_trades": 0,
+    "reservations": 0,
+    "ledger": 0
+  },
+  "estimate_selectors": [
+    "0x8803dbee",
+    "0x38ed1739",
+    "0x8803dbee",
+    "0x38ed1739"
+  ],
+  "validated_market": [
+    {
+      "quote_base_units": [
+        100000000000,
+        100000000000,
+        100000000000,
+        100000000000
+      ],
+      "quote_counter_units": [
+        52761762,
+        52418017,
+        52852800,
+        52647300
+      ],
+      "trusted_buy": true,
+      "valid_sell": false
+    }
+  ]
+}

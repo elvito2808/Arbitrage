@@ -1,0 +1,14 @@
+{
+  "mode": "offline synthetic",
+  "counts": {
+    "analysis_cycles": 1,
+    "simulated_trades": 1,
+    "reservations": 3,
+    "ledger": 0
+  },
+  "reasons": [
+    null,
+    "maximum_loss"
+  ],
+  "estimator_calls": 2
+}

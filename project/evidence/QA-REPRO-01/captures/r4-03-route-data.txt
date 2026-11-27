@@ -1,0 +1,34 @@
+OFFLINE SYNTHETIC QA-REPRO-01 EVIDENCE
+[01:30:15.000] INFO [SYSTEM] Starting SIMULATION ONLY (2026-11-26 UTC); foreground logger active; real trading disabled worker=worker-1 session=da01689553754bf69e3498f49b16c9d0
+[01:30:15.000] INFO [CONFIG] Applied simulation configuration worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 capacity=3 active_limit=1 chain_id=295 trade_hbar=1000 profit_usdt=0.1 loss_usdt=0.3 slippage=0.005 fee=0.001 gas_cap=2 ttl_seconds=10 interval_seconds=15 network=hedera:295 market=HBAR-USDT dex_market=WHBAR-USDC mode=simulation parity=True deadline=2026-11-27T01:30:15+00:00
+[01:30:15.000] INFO [HEALTH] STARTING worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 delay_seconds=UNKNOWN attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 check=configuration outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 check=storage outcome=PASS attempt=1
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 previous=UNKNOWN delta=UNKNOWN total=50000.00000000 reserved=0.00000000 available=50000.00000000 holding=dex.WHBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 previous=UNKNOWN delta=UNKNOWN total=3000.000000 reserved=0.000000 available=3000.000000 holding=dex.USDC phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 previous=UNKNOWN delta=UNKNOWN total=1000.00000000 reserved=0.00000000 available=1000.00000000 holding=dex.HBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 previous=UNKNOWN delta=UNKNOWN total=50000.00000000 reserved=0.00000000 available=50000.00000000 holding=cex.HBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 previous=UNKNOWN delta=UNKNOWN total=3000.000000 reserved=0.000000 available=3000.000000 holding=cex.USDT phase=opening reconciliation=PASS
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 check=recovery outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] PREFLIGHT_CHECKING worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 delay_seconds=UNKNOWN attempt=1
+[01:30:15.000] INFO [KUCOIN] KuCoin source changed worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 source=rest reason=websocket_unavailable
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 chain_id=295 router_number=3045981 pair=WHBAR-USDC rpc=PASS mirror=PASS pool=0xdb34c1ef944883f0e5a2fc18b6c1978b088bd31d check=hedera outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 source=rest check=kucoin outcome=PASS attempt=1
+[01:30:15.000] WARNING [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 check=kucoin_websocket outcome=DEGRADED attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 check=kucoin_rest outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 check=snapshots outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 gas_units=150000 capped_tinybars=48900000 check=buy_gas outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 gas_units=150000 capped_tinybars=48900000 check=sell_gas outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 hbar_tinybars=100000000 usdc_balance=1000000000 usdc_allowance=1000000000 whbar_balance=200000000000 whbar_allowance=200000000000 usdc_associated=True whbar_associated=True check=sender outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 check=balances outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] READY worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 delay_seconds=UNKNOWN attempt=1
+[01:30:30.000] INFO [HEALTH] RUNNING worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 delay_seconds=UNKNOWN attempt=1
+[01:30:30.000] INFO [SYSTEM] worker_state worker=worker-1 session=da01689553754bf69e3498f49b16c9d0
+[01:30:30.000] INFO [ARB] Analysis started worker=worker-1 cycle=e03370041b7b477a8bce847b77b5e375 session=da01689553754bf69e3498f49b16c9d0 number=1
+[01:30:30.000] INFO [ARB] Direction evaluated worker=worker-1 cycle=e03370041b7b477a8bce847b77b5e375 session=da01689553754bf69e3498f49b16c9d0 number=1 trade_hbar=UNKNOWN dex_usdc=UNKNOWN cex_usdt=UNKNOWN gas_observed_hbar=UNKNOWN gas_observed_usdt=UNKNOWN gas_capped_hbar=UNKNOWN gas_capped_usdt=UNKNOWN indicative_usdt=UNKNOWN net_usdt=UNKNOWN stressed_usdt=UNKNOWN direction=buy_dex status=insufficient_data reason=gas_invalid source=rest dex_side=UNKNOWN cex_side=UNKNOWN admission=not_eligible guard=UNKNOWN
+[01:30:30.000] INFO [ARB] Direction evaluated worker=worker-1 cycle=e03370041b7b477a8bce847b77b5e375 session=da01689553754bf69e3498f49b16c9d0 number=1 trade_hbar=UNKNOWN dex_usdc=UNKNOWN cex_usdt=UNKNOWN gas_observed_hbar=UNKNOWN gas_observed_usdt=UNKNOWN gas_capped_hbar=UNKNOWN gas_capped_usdt=UNKNOWN indicative_usdt=UNKNOWN net_usdt=UNKNOWN stressed_usdt=UNKNOWN direction=sell_dex status=insufficient_data reason=gas_invalid source=rest dex_side=UNKNOWN cex_side=UNKNOWN admission=not_eligible guard=UNKNOWN
+[01:30:30.000] INFO [ARB] Analysis completed worker=worker-1 cycle=e03370041b7b477a8bce847b77b5e375 session=da01689553754bf69e3498f49b16c9d0 number=1 duration_ms=0 result=not_admitted source=rest
+[01:30:30.000] INFO [SYSTEM] worker_state worker=worker-1 session=da01689553754bf69e3498f49b16c9d0
+[01:30:30.000] INFO [HEALTH] CANCELLED worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 delay_seconds=UNKNOWN attempt=1
+[01:30:30.000] INFO [SYSTEM] Session lifecycle worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 intent=shutdown
+[01:30:30.000] INFO [SYSTEM] Session summary worker=worker-1 session=da01689553754bf69e3498f49b16c9d0 cycles=1 admissions=0 filled=0 failed=0 incomplete=0 manual_review=0 active=0 cycle_errors=1 console_drops=0
