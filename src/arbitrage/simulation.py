@@ -128,6 +128,7 @@ class SimulationEngine(OpportunityCoordinator):
     _scenario = Scenario()
     _sleep: Callable[[float], Awaitable[None]] = staticmethod(asyncio.sleep)
     _public_simulation = False
+    on_journal_commit: Callable[[str], None] | None = None
     recovery_gate: Callable[[Transaction], bool] | None = None
 
     @classmethod
@@ -171,7 +172,8 @@ class SimulationEngine(OpportunityCoordinator):
         # in this transaction. There is no caller-supplied Evaluation entry point.
         now = self._now()
         worker = tx.worker(cycle.worker_id)
-        if (not tx.owns_analysis(NETWORK, cycle.id, now)
+        if ((self.gate is not None and self.gate(tx, cycle.worker_id, now) is not None)
+                or not tx.owns_analysis(NETWORK, cycle.id, now)
                 or worker is None or worker.state != WorkerState.RUNNING
                 or tx.analysis(cycle.id) != cycle
                 or not tx.owns_snapshots(NETWORK, cycle.id, self._snapshot_ids(market))):
@@ -431,7 +433,9 @@ class SimulationEngine(OpportunityCoordinator):
             except (ValueError, sqlite3.IntegrityError):
                 if self._journal_scope is None:
                     return "manual_review"
-                return self._settlement_review(row["id"])
+                status, due = self._settlement_review(row["id"]), None
+            if self.on_journal_commit:
+                self.on_journal_commit(row["id"])
             if due is not None:
                 await self._sleep(max(0, (due - self._now()).total_seconds()))
         return status

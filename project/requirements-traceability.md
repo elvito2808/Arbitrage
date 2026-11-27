@@ -87,3 +87,60 @@ The dispositions below advance the affected baseline entries. Product code revie
 | B5 [Current provider estimates](https://github.com/elvito2808/Arbitrage/issues/21), ARB-023 | saucerswap, config | Hashio fee unit confirmed. Both public route requests reverted for the sampled account. Eligible public estimation context remains unverified. | Bounded read-only public probe | [Provider evidence](evidence/ARB-P07.1-gas/verification.md) at `ff02afb` | PARTIAL |
 | INT [Round 1 integration](tasks/ARB-032-039.md), ARB-033, ARB-039, ARB-045 | coordinator, simulation, runtime, storage | Recheck risk, source IDs and lease before virtual reservation. Recover accepted work exactly once across foreground exit, with explicit deadline drain and emergency fencing. | test_public_simulation.py, qa/test_round1_independent.py, qa/test_p07_process.py | [Integration PR](https://github.com/elvito2808/Arbitrage/pull/26), Agent 3 replay at `8ac742c` | PASS |
 | QA [Acceptance assignment](tasks/ARB-047-055.md), ARB-055 | tests/qa, project/evidence | Independent offline verification passed. Public readiness and Agent 0 disposition remain open. | 239 passed, 3 optional public network probes skipped | Agent 3 replay at `8ac742c` | PARTIAL |
+
+## Startup readiness gate (SRG-01 Revision 2)
+
+Source artifacts are preserved byte-for-byte under `project/requirements/`. [SRG v1.0](requirements/Startup_Readiness_Gate_Requirements_v1.0.md) · [CLM v1.0](requirements/Console_Logging_and_Monitoring_Requirements_v1.0.md)
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Startup_Readiness_Gate_Requirements_v1.0.md | `80714ee24b9ceb95c54a4f985dd0c71434f5fdffac08ef3a6383cd856fb65a17` |
+| Console_Logging_and_Monitoring_Requirements_v1.0.md | `2a52eba35c352153accdec703edf61d26ea381f678ae66368ae509d940cbf9d2` |
+
+| Requirement | Implementation | Offline test |
+| --- | --- | --- |
+| SRG-001 | Existing owner lock, session intent, emergency latch and immutable deadline | T01, T06, T07 and lifecycle suite |
+| SRG-002 | Persisted STARTING, PREFLIGHT_CHECKING, READY and RUNNING independent of intent | T01 |
+| SRG-003 | Applied schema validation and clock checks, existing CLI private path and SQLite checks | T03 and CLI suite |
+| SRG-004 | SQLite quick check, foreign keys, opening plus ledger reconciliation, reservation totals and seed only on initialization | T03, T08 |
+| SRG-005 | Existing virtual recovery before market reads, unresolved executions and holds block admission | T07, T08 and recovery suite |
+| SRG-006 | Existing Hedera chain, Mirror, router, factory, pool and token checks with typed identity mismatch | T03, T05 |
+| SRG-007 | Validated KuCoin metadata and two-sided depth, WS preference and REST fallback | T04 and independent WS replay |
+| SRG-008 | Sequential market read within existing shared deadline, valid snapshot identity without analysis or dedup writes | T01, T02, T04 |
+| SRG-009 | Configured sender, read-only Mirror account and token prerequisite checks, adapter-bound two-route RPC estimates | T03, T05, T10 |
+| SRG-010 | Current available virtual input and stressed buy funds, capped virtual gas reserve, profitability-independent pre-flight | T08, T09 and financial suite |
+| SRG-011 | Typed provider and critical failure classifications, unknown evidence fails closed | T02, T03, T05, T06 |
+| SRG-012 | Capped retry count; jitter, minimum network interval, provider cooldown and deadline | T02, T06 |
+| SRG-013 | Lifecycle watcher cancels startup tasks; shutdown and deadline checked before admission | T06, T07 and lifecycle suite |
+| SRG-014 | Session-scoped persisted readiness checked in the same transaction as analysis and reservation fences | T01, T07, T08 |
+| SRG-015 | Existing DEX/CEX market and virtual execution order, risk validation, dedup and interval | T01, T09, T10 and financial suite |
+| SRG-016 | Transient cycle rejection, critical sender, market identity and ledger fencing, existing recovery | T05, T08, T09 and regression suite |
+| SRG-017 | Readiness status and closed events, terminal failure persists and explicit start is supported under existing intent and emergency rules | T01–T08 and CLI suite |
+
+Test IDs in this table refer to `tests/test_startup_readiness.py`. Status and event contracts expose stable types to the future CLM implementation. Public operational gas readiness remains blocked by the [GAS-01-R1 findings](evidence/GAS-01-R1/verification.md). CLM implementation and acceptance testing belong to a separate assignment.
+
+## Console logging and monitoring (CLM-01 Revision 2)
+
+[Unmodified CLM v1.0 requirements](requirements/Console_Logging_and_Monitoring_Requirements_v1.0.md) · [Offline console evidence](evidence/CLM-01/README.md)
+
+| Requirement | Implementation | Offline test |
+| --- | --- | --- |
+| CLM-001 | UTC millisecond renderer, full record timestamps, session/cycle/execution correlation | T02, T09 |
+| CLM-002 | INFO default, selectable DEBUG, typed severity and observed outcomes | T01, T09 |
+| CLM-003 | Applied configuration and immutable deadline once per foreground activation | T01, T02 |
+| CLM-004 | Existing SRG events, actual scheduled delay and retry exhaustion | T01 |
+| CLM-005 | Reconciled opening balances from persisted holdings | T05, T06 |
+| CLM-006 | Cycle number, UUID, start/end/duration and venue quotes for both directions | T02, T03 |
+| CLM-007 | Persisted quote, gas and profit values with unit conversion only | T03, T05 |
+| CLM-008 | Actual status, reason and admission decision, UNKNOWN values preserved | T03, T04 |
+| CLM-009 | Dynamic source transitions and cycle failure reasons without repeating startup | T02, T04 |
+| CLM-010 | Committed virtual admission, guard reason, execution ID and reservations | T05 |
+| CLM-011 | Committed journal attempts, outcomes, partial fills, fees, gas and holds | T05, T06 |
+| CLM-012 | Post-commit balance reconciliation and deltas by holding | T05, T06 |
+| CLM-013 | Lifecycle events and summaries attributed by persisted session identity | T02, T06, T09 |
+| CLM-014 | Bounded nonblocking queue, separate sink, flush, drop and recovery accounting | T07 |
+| CLM-015 | Closed field allowlist and sanitized output | T08 |
+| CLM-016 | Foreground stderr, compatible status/report, 256-event health history | T08, T09 |
+| CLM-017 | Best-effort observation after financial commit with isolated sink failures | T06, T07, T10 |
+
+CLM-T01 through CLM-T10 are in `tests/test_console_logging.py`. Older analysis records without session attribution are excluded from session summaries. Persisted lifetime totals remain available through status and report.

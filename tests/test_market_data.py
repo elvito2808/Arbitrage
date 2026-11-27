@@ -26,6 +26,7 @@ def abi(*values):
 
 class Hedera:
     def __init__(self):
+        self.source = POOL_TIME
         self.now = POOL_TIME + timedelta(seconds=1)
         self.chain = "0x127"
         self.reverse = False
@@ -42,7 +43,7 @@ class Hedera:
     async def mirror_block(self, number):
         assert number == BLOCK
         return {"number": number, "hash": self.mirror_hash + "cd" * 16,
-                "timestamp": {"to": f"{int(POOL_TIME.timestamp())}.617000001"}}
+                "timestamp": {"to": f"{int(self.source.timestamp())}.617000001"}}
 
     async def rpc(self, method, *params):
         if self.down:
@@ -50,11 +51,13 @@ class Hedera:
         if method == "eth_chainId":
             return self.chain
         if method == "eth_getBlockByNumber":
-            return {"number": hex(BLOCK), "hash": self.rpc_hash, "timestamp": hex(int(POOL_TIME.timestamp()))}
+            return {"number": hex(BLOCK), "hash": self.rpc_hash, "timestamp": hex(int(self.source.timestamp()))}
         if method == "eth_gasPrice":
             if self.gas_down:
                 raise Unavailable("fixture gas unavailable")
             return hex(1_630_000_000_000)
+        if method == "eth_estimateGas":
+            raise Unavailable("fixture has no route estimate")
         assert method == "eth_call"
         call, at = params
         assert at == hex(BLOCK)

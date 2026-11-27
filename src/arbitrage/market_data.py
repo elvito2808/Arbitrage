@@ -28,12 +28,51 @@ class MarketDataError(ValueError):
     """Invalid, inconsistent or stale public data."""
 
 
+class MarketIdentityError(MarketDataError):
+    """Provider state contradicts a required network or market identity."""
+
+
+class RpcRejection(MarketDataError):
+    def __init__(self, status: str):
+        super().__init__("RPC read failed")
+        self.status = status
+
+
+def estimation_rejection(data: object) -> RpcRejection | None:
+    if not isinstance(data, dict):
+        return None
+    message = data.get("message")
+    if not isinstance(message, str):
+        return None
+    if data.get("code") == -32000 and message.endswith(
+        "Error occurred during transaction simulation: Sender account not found."
+    ):
+        return RpcRejection("sender_account_not_found")
+    if data.get("code") == 3:
+        status = message.rsplit(", ", 1)[-1]
+        if status in {
+            "TOKEN_NOT_ASSOCIATED_TO_ACCOUNT", "INSUFFICIENT_TOKEN_BALANCE",
+            "SPENDER_DOES_NOT_HAVE_ALLOWANCE", "AMOUNT_EXCEEDS_ALLOWANCE",
+            "INSUFFICIENT_PAYER_BALANCE",
+        }:
+            return RpcRejection(status)
+    return None
+
+
 class StaleSnapshot(MarketDataError):
     """Snapshot time exceeds the freshness or clock skew limit."""
 
 
 class Unavailable(MarketDataError):
     """Transient public provider failure."""
+
+
+class ProviderTimeout(Unavailable):
+    """Confirmed public request deadline."""
+
+
+class ProviderRateLimited(Unavailable):
+    """Confirmed provider throttle."""
 
 
 def utc_now() -> datetime:
@@ -91,6 +130,9 @@ class PublicConnections:
         self._ids = count(1)
         self._rate_limit_until: dict[str, float] = {}
 
+    def cooldown_seconds(self) -> float:
+        return max(0.0, max(self._rate_limit_until.values(), default=0.0) - self.timer())
+
     async def _json(self, method: str, url: str, payload: dict | None = None) -> dict:
         source = urlsplit(url).hostname
         try:
@@ -114,8 +156,20 @@ class PublicConnections:
                                     self._rate_limit_until[source] = max(
                                         until, self._rate_limit_until.get(source, 0)
                                     )
-                                if response.status == 429 or response.status in (408, 500, 502, 503, 504):
+                                if response.status == 429:
+                                    raise ProviderRateLimited("public HTTP 429")
+                                if response.status in (408, 500, 502, 503, 504):
                                     raise Unavailable(f"public HTTP {response.status}")
+                                if (
+                                    response.status == 400 and payload
+                                    and payload.get("method") == "eth_estimateGas"
+                                ):
+                                    data = await response.json()
+                                    if (isinstance(data, dict) and data.get("jsonrpc") == "2.0"
+                                            and data.get("id") == payload["id"]):
+                                        rejection = estimation_rejection(data.get("error"))
+                                        if rejection:
+                                            raise rejection
                                 if response.status != 200:
                                     raise MarketDataError(f"public HTTP {response.status}")
                                 data = await response.json()
@@ -125,7 +179,7 @@ class PublicConnections:
                                     self._rate_limit_until[source] = self.timer() + max(
                                         delay, retry_delay(response.headers, self.clock())
                                     )
-                                    raise Unavailable("public KuCoin rate limit")
+                                    raise ProviderRateLimited("public KuCoin rate limit")
                                 if response.headers.get("gw-ratelimit-remaining") == "0":
                                     self._rate_limit_until[source] = self.timer() + retry_delay(
                                         response.headers, self.clock()
@@ -140,8 +194,10 @@ class PublicConnections:
                     except (aiohttp.ContentTypeError, ValueError):
                         self.health[source] = "invalid"
                         raise MarketDataError("invalid public JSON response") from None
-                    except (aiohttp.ClientError, TimeoutError):
-                        failure = Unavailable("public connection failed or timed out")
+                    except TimeoutError:
+                        failure = ProviderTimeout("public request timed out")
+                    except aiohttp.ClientError:
+                        failure = Unavailable("public connection failed")
                     self.health[source] = "degraded"
                     if attempt == 2:
                         raise failure
@@ -151,7 +207,7 @@ class PublicConnections:
                         await self.sleep(delay)
         except TimeoutError:
             self.health[source] = "degraded"
-            raise Unavailable("public request deadline exceeded") from None
+            raise ProviderTimeout("public request deadline exceeded") from None
 
     @asynccontextmanager
     async def kucoin_socket(self, endpoint: str, token: str, connect_id: str):
@@ -177,9 +233,21 @@ class PublicConnections:
         })
         if data.get("jsonrpc") != "2.0" or data.get("id") != request_id:
             raise MarketDataError("RPC response identity mismatch")
+        if method == "eth_estimateGas" and (rejection := estimation_rejection(data.get("error"))):
+            raise rejection
         if data.get("result") is None or "error" in data:
             raise MarketDataError("RPC read failed")
         return data["result"]
+
+    async def mirror_sender(self, address: str, router_id: str) -> tuple[dict, dict, dict]:
+        base = f"{MIRROR}/accounts/{address}"
+        async with asyncio.TaskGroup() as group:
+            account = group.create_task(self._json("GET", base))
+            tokens = group.create_task(self._json("GET", f"{base}/tokens?limit=100"))
+            allowances = group.create_task(
+                self._json("GET", f"{base}/allowances/tokens?spender.id={router_id}&limit=100"),
+            )
+        return account.result(), tokens.result(), allowances.result()
 
     async def mirror_block(self, number: int) -> dict:
         return await self._json("GET", f"{MIRROR}/blocks/{number}")

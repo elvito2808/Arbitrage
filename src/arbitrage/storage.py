@@ -161,6 +161,15 @@ class Storage:
             yield Transaction(db)
 
 
+    @contextmanager
+    def observe(self) -> Iterator["Transaction"]:
+        """Best-effort consistent snapshot for logs, with no write lock or busy wait."""
+        with closing(sqlite3.connect(self.path.absolute().as_uri() + "?mode=ro", uri=True, timeout=0)) as db:
+            db.row_factory = sqlite3.Row
+            db.execute("BEGIN")
+            yield Transaction(db)
+
+
 class Transaction:
     def __init__(self, connection: sqlite3.Connection):
         self._db = connection

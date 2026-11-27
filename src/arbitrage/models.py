@@ -212,6 +212,8 @@ class Reason(StrEnum):
     NETWORK_QUOTA = "network_quota"
     MARKET_UNAVAILABLE = "market_unavailable"
     INVALID_MARKET = "invalid_market"
+    MARKET_IDENTITY_MISMATCH = "market_identity_mismatch"
+    READINESS_BLOCKED = "readiness_blocked"
     STALE_OR_INVALID_CLOCK = "stale_or_invalid_clock"
     CROSS_VENUE_SKEW = "cross_venue_skew"
     PROVENANCE_MISMATCH = "provenance_mismatch"
@@ -293,6 +295,7 @@ class SnapshotObservation(Record):
 
 class AnalysisCycle(Record):
     id: Identifier
+    session_id: Identifier | None = None
     worker_id: Identifier
     observed_at: Timestamp
     dex_snapshot: SnapshotObservation | None = None

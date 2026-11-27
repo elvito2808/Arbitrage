@@ -12,6 +12,7 @@ from stat import S_IMODE, S_ISDIR, S_ISREG
 
 
 from .config import load_config, parse_config
+from .operational_log import Level
 from .reporting import export
 from .runtime import WORKERS, Runtime, foreground
 
@@ -50,8 +51,10 @@ def parser():
     init.add_argument("--config", required=True, type=Path, help="validated simulation TOML")
     start = commands.add_parser("start", help="start a new analysis session in the foreground")
     start.add_argument("--worker", choices=WORKERS, default=WORKERS[0])
-    commands.add_parser("resume", help="resume the paused session in the foreground")
-    commands.add_parser("recover", help="reattach in the foreground after untimely process exit")
+    resume = commands.add_parser("resume", help="resume the paused session in the foreground")
+    recover = commands.add_parser("recover", help="reattach in the foreground after untimely process exit")
+    for foreground_command in (start, resume, recover):
+        foreground_command.add_argument("--log-level", choices=("INFO", "DEBUG"), default="INFO")
     commands.add_parser("pause", help="pause the current session")
     commands.add_parser("stop", help="stop the current session")
     commands.add_parser("emergency-stop", help="latch a persistent emergency stop")
@@ -96,7 +99,7 @@ def main(argv=None):
                 config = None if command == "recover" else load_config(config_path)
                 activation = runtime.activate(command, getattr(args, "worker", None), config)
                 if activation:
-                    asyncio.run(foreground(runtime, *activation))
+                    asyncio.run(foreground(runtime, *activation, log_level=Level(args.log_level.lower())))
                 elif command == "resume":
                     raise ValueError("there is no resumable session")
         elif command == "status":
@@ -110,7 +113,7 @@ def main(argv=None):
     except (OSError, ValueError, sqlite3.Error) as error:
         # Only application-owned messages may appear in an error printed by the CLI.
         safe = {
-            "invalid simulation configuration", "there is no resumable session",
+            "invalid simulation configuration", "there is no resumable session", "startup readiness blocked",
             "use an absolute data directory without aliases or symlinks",
             "the data directory must be outside Git repositories",
             "the data directory must be owned by you with mode 0700",
@@ -119,7 +122,7 @@ def main(argv=None):
             "emergency stop is latched", "there is no session", "only a running session can be paused",
             "a session already exists, use pause, resume, recover or stop",
         }
-        detail = error.args[0] if type(error) is ValueError and error.args else None
+        detail = error.args[0] if isinstance(error, ValueError) and error.args else None
         print(f"Error: {detail if isinstance(detail, str) and detail in safe else 'runtime operation failed'}.",
               file=sys.stderr)
         return 1

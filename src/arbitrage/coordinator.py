@@ -12,7 +12,7 @@ from uuid import uuid4
 from .config import Simulation
 from .kucoin import SYMBOL, Book, InsufficientDepth, KuCoin, priced_units, validate_book
 from .market_data import (
-    MAX_AGE, MAX_SKEW, TRADE_UNITS, MarketDataError, PublicConnections, StaleSnapshot, Unavailable,
+    MAX_AGE, MAX_SKEW, TRADE_UNITS, MarketDataError, MarketIdentityError, PublicConnections, StaleSnapshot, Unavailable,
     require_fresh, utc_now,
 )
 from .models import (
@@ -69,6 +69,10 @@ class OpportunityCoordinator:
         self.cex = cex
         self.clock = clock
         self.gate = gate
+        self.market_gate = None
+        self.session_id = None
+        self.on_cycle_start = None
+        self.on_cycle_cancel = None
         self.age = min(MAX_AGE, timedelta(seconds=settings.cache_ttl_seconds))
         self.fee = Fraction(settings.cex_fee_fraction)
         self.profit_floor = max(Fraction("0.10"), Fraction(settings.minimum_profit_usdt))
@@ -185,6 +189,8 @@ class OpportunityCoordinator:
         if any(not isinstance(item, (InvalidCycle, MarketDataError, TimeoutError)) for item in errors):
             raise error
         for item in errors:
+            if isinstance(item, MarketIdentityError):
+                return Reason.MARKET_IDENTITY_MISMATCH
             if isinstance(item, InvalidCycle):
                 return item.reason
             if isinstance(item, StaleSnapshot):
@@ -315,12 +321,13 @@ class OpportunityCoordinator:
     def _miss(
         cycle_id: str, worker_id: str, now: datetime, reason: Reason,
         observations: tuple[SnapshotObservation | None, SnapshotObservation | None] = (None, None),
+        *, session_id=None,
     ) -> AnalysisCycle:
         status = (EvaluationStatus.REJECTED if reason in {
             Reason.DUPLICATE_SNAPSHOT, Reason.CYCLE_BUSY, Reason.NETWORK_QUOTA, Reason.WORKER_INACTIVE,
         } else EvaluationStatus.INSUFFICIENT_DATA)
         return AnalysisCycle(
-            id=cycle_id, worker_id=worker_id, observed_at=now,
+            id=cycle_id, worker_id=worker_id, observed_at=now, session_id=session_id,
             dex_snapshot=observations[0], cex_snapshot=observations[1],
             evaluations=tuple(Evaluation(direction=direction, status=status, reason=reason)
                               for direction in Direction),
@@ -346,16 +353,18 @@ class OpportunityCoordinator:
                 self._timing(market.pool, market.book, now)
             except InvalidCycle as error:
                 reason = error.reason
+        if reason is None and self.market_gate:
+            reason = self.market_gate(tx, market, now)
         if reason is None:
             ids = self._snapshot_ids(market)
             if any(tx.seen_snapshot(NETWORK, key) for key in ids):
                 reason = Reason.DUPLICATE_SNAPSHOT
         if reason is not None:
-            result = self._miss(cycle_id, worker_id, now, reason, observations)
+            result = self._miss(cycle_id, worker_id, now, reason, observations, session_id=self.session_id)
             tx.add_analysis(NETWORK, result)
         else:
             result = AnalysisCycle(
-                id=cycle_id, worker_id=worker_id, observed_at=now,
+                id=cycle_id, worker_id=worker_id, observed_at=now, session_id=self.session_id,
                 dex_snapshot=observations[0], cex_snapshot=observations[1],
                 evaluations=tuple(self._evaluate(tx, direction, market, now) for direction in Direction),
             )
@@ -375,13 +384,15 @@ class OpportunityCoordinator:
 
     async def _cycle(self, worker_id: str) -> AnalysisCycle:
         cycle_id = uuid4().hex
+        if self.on_cycle_start:
+            self.on_cycle_start(cycle_id)
         with self.storage.transaction() as tx:
             now = self._now()
             denied = self.gate(tx, worker_id, now) if self.gate else None
             if denied is None:
                 denied = tx.claim_analysis(NETWORK, cycle_id, worker_id, now, LEASE, MIN_INTERVAL)
             if denied:
-                result = self._miss(cycle_id, worker_id, now, denied)
+                result = self._miss(cycle_id, worker_id, now, denied, session_id=self.session_id)
                 tx.add_analysis(NETWORK, result)
                 return result
         recorded = False
@@ -403,7 +414,10 @@ class OpportunityCoordinator:
                 with self.storage.transaction() as tx:
                     now = self._now()
                     reason = self.gate(tx, worker_id, now) or Reason.CYCLE_INTERRUPTED
-                    tx.add_analysis(NETWORK, self._miss(cycle_id, worker_id, now, reason))
+                    cancelled = self._miss(cycle_id, worker_id, now, reason, session_id=self.session_id)
+                    tx.add_analysis(NETWORK, cancelled)
+                if self.on_cycle_cancel:
+                    self.on_cycle_cancel(cancelled)
             raise
         finally:
             if not recorded:

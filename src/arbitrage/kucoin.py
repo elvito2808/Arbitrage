@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import aiohttp
 
-from .market_data import MAX_AGE, TRADE_UNITS, MarketDataError, PublicConnections, Unavailable, require_fresh
+from .market_data import MAX_AGE, TRADE_UNITS, MarketDataError, MarketIdentityError, PublicConnections, Unavailable, require_fresh
 from .models import Asset, MarketQuote, Side, Venue
 
 BASE_CURRENCY = "HBAR"
@@ -215,7 +215,7 @@ class KuCoin:
         if (data.get("symbol"), data.get("baseCurrency"), data.get("quoteCurrency")) != (
             SYMBOL, BASE_CURRENCY, QUOTE_CURRENCY,
         ):
-            raise MarketDataError("KuCoin symbol identity mismatch")
+            raise MarketIdentityError("KuCoin symbol identity mismatch")
         base = exact(data.get("baseIncrement"))
         price = exact(data.get("priceIncrement"))
         quote = exact(data.get("quoteIncrement"))

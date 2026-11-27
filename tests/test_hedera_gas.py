@@ -17,6 +17,7 @@ from test_coordinator import CONFIG
 from test_market_data import BLOCK, HASH, Hedera, POOL_TIME
 
 SENDER = "0x" + "12" * 20
+APPROVED_SENDER = "0x0000000000000000000000000000000000a76192"
 
 
 class Estimator(Hedera):
@@ -25,11 +26,14 @@ class Estimator(Hedera):
         self.calls = []
         self.outcomes = {Side.BUY: hex(145_000), Side.SELL: hex(165_000)}
         self.head_changed = False
+        self.head_hash_changed = False
         self.advance_time = False
 
     async def rpc(self, method, *params):
         if method == "eth_getBlockByNumber" and self.head_changed and self.calls:
             return {"number": hex(BLOCK + 1), "hash": HASH}
+        if method == "eth_getBlockByNumber" and self.head_hash_changed and self.calls:
+            return {"number": hex(BLOCK), "hash": "0x" + "ff" * 32}
         if method != "eth_estimateGas":
             return await super().rpc(method, *params)
         call, block = params
@@ -46,7 +50,8 @@ class Estimator(Hedera):
 
 def test_bidirectional_estimate_requests_and_adapter_bound_evidence():
     provider = Estimator()
-    dex = SaucerSwap(provider, estimate_sender=SENDER)
+    sender = load_config(CONFIG).simulation.hedera_estimate_sender
+    dex = SaucerSwap(provider, estimate_sender=sender)
     snap = asyncio.run(dex.snapshot())
     buy, sell = snap.gas
     assert len(provider.calls) == 2
@@ -58,10 +63,10 @@ def test_bidirectional_estimate_requests_and_adapter_bound_evidence():
         gas = buy if is_buy else sell
         expected_path = (USDC, WHBAR) if is_buy else (WHBAR, USDC)
         provenance = gas.route_evidence.rpc
-        assert call == {"from": SENDER, "to": ROUTER, "data": provenance.calldata, "value": "0x0"}
+        assert call == {"from": sender, "to": ROUTER, "data": provenance.calldata, "value": "0x0"}
         assert call["data"][2:10] == (EXACT_OUTPUT_SELECTOR if is_buy else EXACT_INPUT_SELECTOR)
         assert words("0x" + call["data"][10:], 8) == (
-            TRADE_UNITS, 53_025_571 if is_buy else 52_155_926, 160, int(SENDER, 16),
+            TRADE_UNITS, 53_025_571 if is_buy else 52_155_926, 160, int(sender, 16),
             int(POOL_TIME.timestamp()) + 10, 2, *(int(address, 16) for address in expected_path),
         )
         assert provenance.path == expected_path and provenance.value_weibars == 0
@@ -97,6 +102,7 @@ def test_invalid_sell_never_inherits_buy_gas(sell_result, error, invalid):
 
 @pytest.mark.parametrize(("field", "error"), [
     ("head_changed", "route_estimate_head_changed"),
+    ("head_hash_changed", "route_estimate_head_changed"),
     ("router_down", "route_context_unverified"),
     ("gas_down", "gas_price_unavailable"),
 ])
@@ -106,7 +112,7 @@ def test_unverified_shared_context_preserves_gross_quotes(field, error):
     pool = asyncio.run(SaucerSwap(provider, estimate_sender=SENDER).snapshot())
     assert all(gas.estimation_error == error and not gas.cost_valid for gas in pool.gas)
     assert len(pool.quotes) == 2
-    assert len(provider.calls) == (2 if field == "head_changed" else 0)
+    assert len(provider.calls) == (2 if field in {"head_changed", "head_hash_changed"} else 0)
 
 
 def test_route_deadline_rejects_estimate_before_quote_ttl():
@@ -128,11 +134,17 @@ def test_historical_calibration_and_tinybar_ceiling():
 
 
 def test_only_public_sender_is_configurable():
-    assert load_config(CONFIG).simulation.hedera_estimate_sender is None
-    config = CONFIG.read_bytes()
+    settings = load_config(CONFIG).simulation
+    assert settings.hedera_estimate_sender == APPROVED_SENDER.lower()
+    assert settings.gas_price_cap_multiple == 2
+    config = CONFIG.read_bytes().replace(
+        f'hedera_estimate_sender = "{APPROVED_SENDER}"\n'.encode(), b"",
+    )
+    assert parse_config(config).simulation.hedera_estimate_sender is None
     insertion = b"[simulation]\n"
-    configured = config.replace(insertion, insertion + f'hedera_estimate_sender="{SENDER}"\n'.encode())
-    assert parse_config(configured).simulation.hedera_estimate_sender == SENDER
+    mixed_case = "0x" + APPROVED_SENDER[2:].upper()
+    configured = config.replace(insertion, insertion + f'hedera_estimate_sender="{mixed_case}"\n'.encode())
+    assert parse_config(configured).simulation.hedera_estimate_sender == APPROVED_SENDER
     for rejected in ("0x" + "0" * 40, "0x" + "a" * 64, "not-an-address"):
         invalid = config.replace(insertion, insertion + f'hedera_estimate_sender="{rejected}"\n'.encode())
         with pytest.raises(ValueError, match="invalid simulation configuration"):

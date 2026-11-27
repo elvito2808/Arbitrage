@@ -1,0 +1,5 @@
+OFFLINE SYNTHETIC TEST EVIDENCE
+[01:30:15.000] INFO [SYSTEM] Starting SIMULATION ONLY (2026-11-26 UTC); foreground logger active; real trading disabled worker=worker-1 session=f5b4899bd2ec49a184e49141a2b027d2
+[01:30:15.000] WARNING [SYSTEM] Console sink resumed; 41 event(s) lost
+[01:30:15.000] INFO [CONFIG] Applied simulation configuration worker=worker-1 session=f5b4899bd2ec49a184e49141a2b027d2 capacity=3 active_limit=1 chain_id=295 trade_hbar=1000 profit_usdt=0.1 loss_usdt=0.3 slippage=0.005 fee=0.001 gas_cap=2 ttl_seconds=10 interval_seconds=15 network=hedera:295 market=HBAR-USDT dex_market=WHBAR-USDC mode=simulation parity=True deadline=2026-11-27T01:30:15+00:00
+[01:30:15.000] INFO [HEALTH] STARTING worker=worker-1 session=f5b4899bd2ec49a184e49141a2b027d2 delay_seconds=UNKNOWN attempt=1

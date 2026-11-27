@@ -37,6 +37,8 @@ class PublicReplay(ReplaySession):
         self.reject_gas = reject_gas
         self.websocket_closed = False
         self.corrupt = asyncio.Event()
+        self.advance = asyncio.Event()
+        self.advanced_book = asyncio.Event()
 
     @asynccontextmanager
     async def request(self, method, url, *, json, allow_redirects):
@@ -107,11 +109,22 @@ class SocketReplay:
             return {"type": "welcome", "id": self.connect_id}
         if self.delivered == 2:
             return {"type": "ack", "id": self.connect_id}
-        if self.delivered == 3:
+        if self.delivered == 4:
+            waits = [asyncio.create_task(event.wait()) for event in (self.session.advance, self.session.corrupt)]
+            try:
+                await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for task in waits:
+                    task.cancel()
+                await asyncio.gather(*waits, return_exceptions=True)
+            if self.session.corrupt.is_set():
+                return {"type": "message", "topic": "/spotMarket/level2Depth5:BTC-USDT", "data": {}}
+            self.session.advanced_book.set()
+        if self.delivered in (3, 4):
             return {
                 "type": "message", "topic": DEPTH_TOPIC, "subject": "level2",
                 "data": {
-                    "timestamp": int(POOL_TIME.timestamp() * 1000) + 700,
+                    "timestamp": int(self.session.hedera.source.timestamp() * 1000) + 700,
                     "bids": [["0.05500", "300"], ["0.05490", "1000"]],
                     "asks": [["0.05510", "1500"]],
                 },
@@ -129,7 +142,7 @@ class SocketReplay:
         self.session.websocket_closed = True
 
 
-def test_independent_foreground_websocket_and_route_gas_reconcile(tmp_path, monkeypatch):
+def test_independent_foreground_websocket_and_route_gas_reconcile(tmp_path, monkeypatch, funded_sender):
     def forbid_network(*args, **kwargs):
         raise AssertionError("expected deterministic transport")
 
@@ -150,6 +163,12 @@ def test_independent_foreground_websocket_and_route_gas_reconcile(tmp_path, monk
     async def runtime_sleep(delay):
         if delay == 0.25:
             await release_watch.wait()
+        elif not fake.advance.is_set():
+            clock[0] += timedelta(seconds=delay)
+            fake.hedera.source += timedelta(seconds=delay)
+            fake.advance.set()
+            await fake.advanced_book.wait()
+            await asyncio.sleep(0)
         else:
             completed_sleep.set()
             await asyncio.Future()
@@ -238,7 +257,7 @@ def test_independent_foreground_websocket_and_route_gas_reconcile(tmp_path, monk
         assert eligible[0]["requested_cex"]["quote_units"] == 54_875_070
 
 
-def test_independent_foreground_websocket_and_failed_route_estimates_do_not_post(tmp_path, monkeypatch):
+def test_independent_foreground_websocket_and_failed_route_estimates_do_not_post(tmp_path, monkeypatch, funded_sender):
     def forbid_network(*args, **kwargs):
         raise AssertionError("expected deterministic transport")
 
@@ -280,14 +299,12 @@ def test_independent_foreground_websocket_and_failed_route_estimates_do_not_post
         assert db.execute("SELECT * FROM balances ORDER BY holding").fetchall() == opening
         for table in ("simulated_trades", "simulation_events", "reservations", "ledger", "executions"):
             assert db.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)
-        payload, = db.execute("SELECT payload FROM analysis_cycles").fetchone()
-        evaluations = json.loads(payload)["evaluations"]
-        assert {item["reason"] for item in evaluations} <= {"gas_unknown", "gas_invalid"}
+        assert db.execute("SELECT count(*) FROM analysis_cycles").fetchone() == (0,)
         assert db.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_independent_disconnected_snapshot_cannot_be_admitted(tmp_path, monkeypatch):
+def test_independent_disconnected_snapshot_cannot_be_admitted(tmp_path, monkeypatch, funded_sender):
     def forbid_network(*args, **kwargs):
         raise AssertionError("expected deterministic transport")
 
@@ -339,6 +356,4 @@ def test_independent_disconnected_snapshot_cannot_be_admitted(tmp_path, monkeypa
         assert db.execute("SELECT * FROM balances ORDER BY holding").fetchall() == opening
         for table in ("simulated_trades", "reservations", "ledger", "analyzed_snapshots"):
             assert db.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)
-        payload, = db.execute("SELECT payload FROM analysis_cycles").fetchone()
-        evaluations = json.loads(payload)["evaluations"]
-        assert {item["reason"] for item in evaluations} == {"invalid_market"}
+        assert db.execute("SELECT count(*) FROM analysis_cycles").fetchone() == (0,)

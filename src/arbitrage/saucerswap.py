@@ -10,7 +10,8 @@ from math import ceil
 from urllib.parse import urlsplit
 
 from .market_data import (
-    MAX_AGE, RPC, TRADE_UNITS, MarketDataError, PublicConnections, Unavailable, require_fresh,
+    MAX_AGE, RPC, TRADE_UNITS, MarketDataError, MarketIdentityError, PublicConnections, ProviderRateLimited, ProviderTimeout,
+    RpcRejection, Unavailable, require_fresh,
 )
 from .models import Asset, HederaGasProvenance, Identifier, MarketQuote, PositiveUnits, Record, Side, Venue
 
@@ -175,7 +176,11 @@ class SaucerSwap:
             async with asyncio.timeout(2):
                 raw = await self.public.rpc("eth_gasPrice")
             price = quantity(raw, WEIBARS_PER_TINYBAR, 10**18)
-        except (Unavailable, TimeoutError):
+        except ProviderRateLimited:
+            return None, None, "provider_rate_limited"
+        except (ProviderTimeout, TimeoutError):
+            return None, None, "provider_timeout"
+        except Unavailable:
             return None, None, "gas_price_unavailable"
         except MarketDataError:
             return None, None, "gas_price_invalid"
@@ -190,7 +195,20 @@ class SaucerSwap:
             call, path = self._estimate_call(side, sender, buy, sell, deadline)
             async with asyncio.timeout(2):
                 raw = await self.public.rpc("eth_estimateGas", call, "latest")
-        except (MarketDataError, TimeoutError):
+        except RpcRejection as error:
+            reason = {
+                "sender_account_not_found": "sender_account_not_found",
+                "TOKEN_NOT_ASSOCIATED_TO_ACCOUNT": "missing_token_association",
+                "SPENDER_DOES_NOT_HAVE_ALLOWANCE": "insufficient_allowance",
+                "AMOUNT_EXCEEDS_ALLOWANCE": "insufficient_allowance",
+                "INSUFFICIENT_PAYER_BALANCE": "insufficient_sender_hbar",
+            }.get(error.status, "route_estimate_unavailable")
+            return GasEstimate(side, price_observed, prices, estimation_error=reason)
+        except ProviderRateLimited:
+            return GasEstimate(side, price_observed, prices, estimation_error="provider_rate_limited")
+        except (TimeoutError, ProviderTimeout):
+            return GasEstimate(side, price_observed, prices, estimation_error="provider_timeout")
+        except MarketDataError:
             return GasEstimate(side, price_observed, prices, estimation_error="route_estimate_unavailable")
         try:
             estimate = quantity(raw, MIN_CONTRACT_GAS, MAX_TRANSACTION_GAS)
@@ -289,7 +307,7 @@ class SaucerSwap:
 
     async def _read(self) -> PoolSnapshot:
         if await self.public.rpc("eth_chainId") != hex(CHAIN_ID):
-            raise MarketDataError("expected Hedera chain ID 295")
+            raise MarketIdentityError("expected Hedera chain ID 295")
         block = await self.public.rpc("eth_getBlockByNumber", "latest", False)
         header_received = self.public.clock()
         try:
@@ -316,7 +334,7 @@ class SaucerSwap:
             (int(PAIR, 16),), (int(USDC, 16),), (int(WHBAR, 16),), (6,), (8,),
         )
         if tuple(task.result() for task in (factory_pair, token0, token1, decimals0, decimals1)) != expected:
-            raise MarketDataError("SaucerSwap factory, token ordering or decimals mismatch")
+            raise MarketIdentityError("SaucerSwap factory, token ordering or decimals mismatch")
         try:
             mirror_data = mirror.result()
             seconds, _, fraction = mirror_data["timestamp"]["to"].partition(".")
@@ -362,7 +380,7 @@ class SaucerSwap:
                     async with asyncio.timeout(9):
                         snapshot = await self._read()
                 except TimeoutError:
-                    raise Unavailable("pool snapshot deadline exceeded") from None
+                    raise ProviderTimeout("pool snapshot deadline exceeded") from None
             except (MarketDataError, ExceptionGroup) as exc:
                 errors = exc.exceptions if isinstance(exc, ExceptionGroup) else (exc,)
                 if all(isinstance(error, Unavailable) for error in errors) and self._cached:

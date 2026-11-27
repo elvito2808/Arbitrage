@@ -1,0 +1,26 @@
+OFFLINE SYNTHETIC TEST EVIDENCE
+[01:30:15.000] INFO [SYSTEM] Starting SIMULATION ONLY (2026-11-26 UTC); foreground logger active; real trading disabled worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f
+[01:30:15.000] INFO [CONFIG] Applied simulation configuration worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f capacity=3 active_limit=1 chain_id=295 trade_hbar=1000 profit_usdt=0.1 loss_usdt=0.3 slippage=0.005 fee=0.001 gas_cap=2 ttl_seconds=10 interval_seconds=15 network=hedera:295 market=HBAR-USDT dex_market=WHBAR-USDC mode=simulation parity=True deadline=2026-11-27T01:30:15+00:00
+[01:30:15.000] INFO [HEALTH] STARTING worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f delay_seconds=UNKNOWN attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f check=configuration outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f check=storage outcome=PASS attempt=1
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f previous=UNKNOWN delta=UNKNOWN total=50000.00000000 reserved=0.00000000 available=50000.00000000 holding=dex.WHBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f previous=UNKNOWN delta=UNKNOWN total=3000.000000 reserved=0.000000 available=3000.000000 holding=dex.USDC phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f previous=UNKNOWN delta=UNKNOWN total=1000.00000000 reserved=0.00000000 available=1000.00000000 holding=dex.HBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f previous=UNKNOWN delta=UNKNOWN total=50000.00000000 reserved=0.00000000 available=50000.00000000 holding=cex.HBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f previous=UNKNOWN delta=UNKNOWN total=3000.000000 reserved=0.000000 available=3000.000000 holding=cex.USDT phase=opening reconciliation=PASS
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f check=recovery outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] PREFLIGHT_CHECKING worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f delay_seconds=UNKNOWN attempt=1
+[01:30:15.000] INFO [KUCOIN] KuCoin source changed worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f source=rest reason=websocket_unavailable
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f chain_id=295 router_number=3045981 pair=WHBAR-USDC rpc=PASS mirror=PASS pool=0xdb34c1ef944883f0e5a2fc18b6c1978b088bd31d check=hedera outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f source=rest check=kucoin outcome=PASS attempt=1
+[01:30:15.000] WARNING [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f check=kucoin_websocket outcome=DEGRADED attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f check=kucoin_rest outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f check=snapshots outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f gas_units=150000 capped_tinybars=48900000 check=buy_gas outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f gas_units=150000 capped_tinybars=48900000 check=sell_gas outcome=PASS attempt=1
+[01:30:15.000] ERROR [HEALTH] Readiness check worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f hbar_tinybars=100000000 usdc_balance=0 usdc_allowance=0 whbar_balance=0 whbar_allowance=0 usdc_associated=False whbar_associated=False check=sender outcome=FAIL diagnostic=missing_token_association attempt=1
+[01:30:15.000] ERROR [HEALTH] STARTUP_BLOCKED worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f delay_seconds=UNKNOWN diagnostic=missing_token_association attempt=1
+[01:30:15.000] INFO [SYSTEM] worker_state worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f
+[01:30:15.000] INFO [SYSTEM] Session lifecycle worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f intent=startup_blocked
+[01:30:15.000] INFO [SYSTEM] Session summary worker=worker-1 session=43a7fd1fcc7c415bae71e45ee33bb86f cycles=0 admissions=0 filled=0 failed=0 incomplete=0 manual_review=0 active=0 cycle_errors=0 console_drops=0
