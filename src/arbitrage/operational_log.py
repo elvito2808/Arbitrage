@@ -8,6 +8,7 @@ from decimal import Decimal
 from queue import Empty, Full, Queue
 
 
+from .market_data import MarketFailure
 from .models import GAS_SOURCE, Direction, EvaluationStatus, Holding, Reason, Venue
 from .readiness import Check, Diagnostic, Outcome, ReadinessState
 
@@ -23,6 +24,7 @@ class Event(StrEnum):
     BALANCE = "balance"
     LIFECYCLE = "lifecycle"
     NETWORK_SAMPLE = "network_sample"
+    MARKET_FAILURE = "market_failure"
     SESSION_SUMMARY = "session_summary"
     ANALYSIS = "analysis"
     WORKER_STATE = "worker_state"
@@ -122,6 +124,10 @@ class OperationalLog:
                 record[key] = str(value)
             elif key in details and value is None:
                 record[key] = None
+        if event in (Event.READINESS_CHECK, Event.MARKET_FAILURE):
+            failure = details.get("market_failure")
+            if type(failure) is MarketFailure:
+                record["market_failure"] = failure.as_dict()
         if event is Event.READINESS_CHECK:
             if type(pool := details.get("pool")) is str and re.fullmatch(r"0x[0-9a-f]{40}", pool):
                 record["pool"] = pool

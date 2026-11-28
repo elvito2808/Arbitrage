@@ -19,7 +19,9 @@ CHECKS = {
     "configuration": ("CONFIG", "Simulation configuration validation"),
     "storage": ("STORAGE", "SQLite initialization and integrity validation"),
     "recovery": ("RECOVERY", "Prior virtual executions and outstanding holds"),
-    "hedera": ("HEDERA", "Hedera RPC and chain identity"),
+    "hedera": ("HEDERA", "Hedera market verification"),
+    "hedera_rpc": ("HEDERA", "Hedera RPC chain and block header"),
+    "hedera_mirror": ("HEDERA", "Hedera Mirror block provenance"),
     "kucoin": ("KUCOIN", "Market identity and depth"),
     "kucoin_websocket": ("KUCOIN", "WebSocket depth"),
     "kucoin_rest": ("KUCOIN", "REST depth"),
@@ -43,6 +45,16 @@ DIAGNOSTICS = {
     "stale_or_invalid_clock": "Stale market data or invalid clock",
     "route_estimate_invalid": "Invalid or stale gas inputs",
     "route_context_unverified": "SaucerSwap router quote could not be verified",
+    "mirror_indexing_delay": "Mirror head was behind the requested RPC block",
+    "block_not_found": "Requested block is absent despite the Mirror index reaching it",
+    "block_number_mismatch": "Mirror returned a different block number",
+    "block_hash_mismatch": "Mirror hash prefix differs from the RPC block hash",
+    "block_timestamp_mismatch": "Mirror block end time differs from the RPC timestamp beyond tolerance",
+    "stale_snapshot": "Snapshot exceeded freshness or clock skew limits",
+    "invalid_provider_response": "The response has an invalid schema or field",
+    "provider_http_error": "Provider returned an unsuccessful HTTP status",
+    "provider_network_failure": "Connection to the provider failed",
+    "router_quote_mismatch": "Router output disagrees with the integer quote",
     "gas_price_unavailable": "RPC gas price unavailable",
     "gas_price_invalid": "RPC gas price invalid",
     "websocket_unavailable": "WebSocket unavailable",
@@ -68,6 +80,29 @@ def holds(record):
     return ", ".join(amounts) or "none"
 
 
+def render_market_failure(failure):
+    module, provider = {
+        "hedera_rpc": ("HEDERA", "Hedera RPC"),
+        "hedera_mirror": ("HEDERA", "Hedera Mirror"),
+        "saucerswap": ("DEX", "SaucerSwap"),
+        "kucoin_rest": ("KUCOIN", "KuCoin REST"),
+        "market": ("HEALTH", "Cross-venue market data"),
+    }[failure["provider"]]
+    operation = {
+        "block_by_number": "fetch requested block", "latest_indexed_block": "read indexed head",
+        "block_match": "match RPC block", "block_freshness": "check block freshness",
+        "pool_snapshot": "verify pool snapshot", "pool_identity": "verify pool and tokens",
+        "router_quote": "verify router quote", "depth_snapshot": "verify market depth",
+        "snapshot_pair": "verify market snapshots",
+    }.get(failure["operation"], failure["operation"])
+    reason = diagnosis(failure["category"])
+    if "field" in failure:
+        reason += f" ({failure['field']})"
+    if "http_status" in failure:
+        reason += f". HTTP {failure['http_status']}"
+    return module, f"{provider} · {operation}. {reason}."
+
+
 def readiness_check(record):
     check = record.get("check")
     module, subject = CHECKS.get(check, ("HEALTH", "Readiness check"))
@@ -76,10 +111,19 @@ def readiness_check(record):
     message = f"{result} · {subject}"
     if reason:
         message += f". {diagnosis(reason)}"
+    failure = record.get("market_failure")
+    if failure and (check in ("hedera_rpc", "hedera_mirror", "kucoin_rest") or
+                    check == "hedera" and failure["operation"] == "eth_call" or
+                    failure["provider"] in ("saucerswap", "market")):
+        module, explanation = render_market_failure(failure)
+        yield module, f"{result} · {explanation}"
+        return
+    if check == "hedera_rpc" and result == "PASS":
+        yield module, f"PASS · Hedera RPC verified chain ID {value(record, 'chain_id')} and the block header."
+        return
     if check == "kucoin" and record.get("source"):
         message += f" via {SOURCES[record['source']]}"
     if check == "hedera" and result == "PASS":
-        yield module, f"PASS · Hedera RPC verified chain ID {value(record, 'chain_id')}. Mirror corroborated the block."
         yield "DEX", (f"PASS · SaucerSwap {value(record, 'pair')} token identity and decimals verified. "
                       f"Pool {value(record, 'pool')}, router 0.0.{value(record, 'router_number')}.")
     elif check in ("buy_gas", "sell_gas") and result == "PASS":
@@ -228,6 +272,9 @@ def messages(record, at):
         yield "SYSTEM", "Generate or refresh the Excel workbook with the report command."
     elif event == "storage_status":
         yield "STORAGE", "Could not read or project the operational status."
+    elif event == "market_failure":
+        if failure := record.get("market_failure"):
+            yield render_market_failure(failure)
     elif event == "network_sample":
         yield "HEALTH", f"Network sample · HTTP retries {v('http_retries')}, cache hits {v('cache_hits')}."
 

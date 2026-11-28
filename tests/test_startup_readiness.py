@@ -172,7 +172,9 @@ def test_srg_t04_websocket_fallback(startup, rest_available):
                        retries=0 if rest_available else 3)
     readiness = runtime.status()["readiness"]
     assert readiness["checks"]["kucoin_websocket"]["outcome"] == ("DEGRADED" if rest_available else "UNKNOWN")
-    assert readiness["checks"]["kucoin_rest"]["outcome"] == ("PASS" if rest_available else "UNKNOWN")
+    assert readiness["checks"]["kucoin_rest"]["outcome"] == ("PASS" if rest_available else "DEGRADED")
+    assert readiness["checks"]["hedera_rpc"]["outcome"] == "PASS"
+    assert readiness["checks"]["hedera_mirror"]["outcome"] == "PASS"
     assert db_count(runtime, "analysis_cycles") == int(rest_available)
 
 

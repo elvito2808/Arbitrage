@@ -83,3 +83,5 @@ sudo arbitrage-ctl start
 ```
 
 The installer builds the checked-out Git commit. Commit any approved source edits before selecting that revision. A new release is built under `/opt/arbitrage/releases/` before its selection via `/opt/arbitrage/current`. Existing private state and prior releases are kept. For a failed launch after successful session preparation, inspect status and use `recover` if the saved running intent is recoverable. For permission or incomplete-state errors, restore the correct private files from backup before retrying. An existing unmanaged service, launcher, or unexpected account requires review by the server operator.
+
+For a blocked market startup and a diagnostic upgrade, see [startup market diagnostics](STARTUP_MARKET_DIAGNOSTICS.md).

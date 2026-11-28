@@ -81,3 +81,5 @@ bash scripts/install-wsl.sh --upgrade
 ```
 
 The installer builds the checked-out Git commit and keeps older releases. A venv error usually means Ubuntu's `python3.12-venv` is missing. For a filesystem error, check that `HOME` and the checkout are on the distribution's Linux filesystem. A foreground-lock error means a runtime or installer still holds the lock. Check status and let it finish. An incomplete state error requires restoring the private config and database. An emergency latch or unresolved execution requires review. See [management commands](COMMANDS.md).
+
+For a blocked market startup and a diagnostic upgrade, see [startup market diagnostics](STARTUP_MARKET_DIAGNOSTICS.md).

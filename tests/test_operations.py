@@ -397,10 +397,10 @@ def test_systemd_template_is_inert_and_recovery_only():
     repository = Path(__file__).resolve().parents[1]
     template = repository / "deploy" / "templates" / "arbitrage.service.example"
     text = template.read_text()
-    assert "NOT DEPLOYED" in text
-    assert "--data-dir /var/lib/arbitrage recover" in text
+    assert "[Install]" not in text
+    assert "/deploy/managed.py /var/lib/arbitrage recover" in text
     assert "User=arbitrage" in text and "StateDirectoryMode=0700" in text
-    assert "TimeoutStopSec=20s" in text and "Restart=on-failure" in text
+    assert "TimeoutStopSec=30s" in text and "Restart=on-abnormal" in text and "StartLimitBurst=3" in text
     assert "StandardOutput=journal" in text and not template.with_suffix("").exists()
 
 

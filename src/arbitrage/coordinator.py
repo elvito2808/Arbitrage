@@ -13,13 +13,14 @@ from .config import Simulation
 from .kucoin import SYMBOL, Book, InsufficientDepth, KuCoin, priced_units, validate_book
 from .market_data import (
     MAX_AGE, MAX_SKEW, TRADE_UNITS, MarketDataError, MarketIdentityError, PublicConnections, StaleSnapshot, Unavailable,
-    require_fresh, utc_now,
+    MarketFailure, ProviderTimeout, market_errors, market_failure, require_fresh, utc_now,
 )
 from .models import (
     MAX_UNITS, AnalysisCycle, Asset, Direction, Evaluation, EvaluationStatus,
     Holding, KuCoinBookObservation, MarketQuote, Reason, Side, SnapshotObservation, Venue, Worker, WorkerState,
     normalize_time,
 )
+from .readiness import Diagnostic
 from .saucerswap import (
     GasEstimate, PoolSnapshot, RouteGasEvidence, SaucerSwap, amounts, gas_cost_tinybars,
 )
@@ -43,8 +44,9 @@ def usdt(units: int) -> Decimal:
 
 
 class InvalidCycle(ValueError):
-    def __init__(self, reason: Reason):
+    def __init__(self, reason: Reason, failure: MarketFailure | None = None):
         self.reason = reason
+        self.failure = failure
         super().__init__(reason.value)
 
 
@@ -73,6 +75,7 @@ class OpportunityCoordinator:
         self.session_id = None
         self.on_cycle_start = None
         self.on_cycle_cancel = None
+        self.on_market_failure = None
         self.age = min(MAX_AGE, timedelta(seconds=settings.cache_ttl_seconds))
         self.fee = Fraction(settings.cex_fee_fraction)
         self.profit_floor = max(Fraction("0.10"), Fraction(settings.minimum_profit_usdt))
@@ -101,16 +104,25 @@ class OpportunityCoordinator:
         return normalize_time(self.clock())
 
     def _timing(self, pool: PoolSnapshot, book: Book, now: datetime) -> None:
-        try:
-            for snap in (pool, book):
+        for provider, snap in (("saucerswap", pool), ("market", book)):
+            try:
                 require_fresh(snap.source_at, snap.received_at, now, self.age)
-        except (MarketDataError, TypeError):
-            raise InvalidCycle(Reason.STALE_OR_INVALID_CLOCK) from None
+            except StaleSnapshot:
+                raise InvalidCycle(Reason.STALE_OR_INVALID_CLOCK, MarketFailure(
+                    provider, "snapshot_pair", Diagnostic.STALE_SNAPSHOT,
+                    source_age_ms=(now - snap.source_at) // timedelta(milliseconds=1),
+                    receipt_age_ms=(now - snap.received_at) // timedelta(milliseconds=1),
+                )) from None
+            except TypeError:
+                raise InvalidCycle(Reason.STALE_OR_INVALID_CLOCK) from None
         if (
             abs(pool.source_at - book.source_at) > MAX_SKEW
             or abs(pool.received_at - book.received_at) > MAX_SKEW
         ):
-            raise InvalidCycle(Reason.CROSS_VENUE_SKEW)
+            raise InvalidCycle(Reason.CROSS_VENUE_SKEW, MarketFailure(
+                "market", "snapshot_pair", Diagnostic.CROSS_VENUE_SKEW,
+                timestamp_delta_ms=(pool.source_at - book.source_at) // timedelta(milliseconds=1),
+            ))
 
     @staticmethod
     def _observations(
@@ -171,23 +183,61 @@ class OpportunityCoordinator:
         gross = priced_units(book.asks, Side.BUY, Fraction(0))
         return Market(pool, book, dex, cex, quotes, gross)
 
-    async def _read(self) -> tuple[PoolSnapshot, Book, datetime]:
-        # Owner-approved sequential sampling: DEX first, then KuCoin.
-        # Keep one bounded deadline for the complete two-venue read.
-        async with asyncio.timeout(READ_DEADLINE):
-            pool = await self.dex.snapshot()
-            dex_completed = self._now()
-            book = await self.cex.snapshot()
+    async def _read(self, *, on_result=None) -> tuple[PoolSnapshot, Book, datetime]:
+        # DEX first, then KuCoin, with one deadline. Preflight can observe
+        # independent outcomes even if one venue fails.
+        errors = []
+        provider, operation = "saucerswap", "pool_snapshot"
+        try:
+            async with asyncio.timeout(READ_DEADLINE):
+                try:
+                    pool = await self.dex.snapshot()
+                except (MarketDataError, ExceptionGroup, TimeoutError) as error:
+                    failures = self._read_errors(error, provider, operation)
+                    if on_result is None:
+                        raise
+                    errors.extend(failures)
+                else:
+                    if on_result is not None:
+                        on_result("dex", pool)
+                dex_completed = self._now()
+                provider, operation = "kucoin_rest", "depth_snapshot"
+                try:
+                    book = await self.cex.snapshot()
+                except (MarketDataError, ExceptionGroup, TimeoutError) as error:
+                    failures = self._read_errors(error, provider, operation)
+                    if on_result is None:
+                        raise
+                    errors.extend(failures)
+                else:
+                    if on_result is not None:
+                        on_result("cex", book)
+        except TimeoutError:
+            if on_result is None and self.on_market_failure is None:
+                raise
+            errors.append(ProviderTimeout("market read deadline exceeded", MarketFailure(
+                provider, operation, Diagnostic.PROVIDER_TIMEOUT,
+            )))
+        if errors:
+            raise ExceptionGroup("preflight market verification failed", errors)
         return pool, book, dex_completed
 
     @staticmethod
+    def _read_errors(error, provider, operation):
+        failures = market_errors(error)
+        for item in failures:
+            if isinstance(item, MarketDataError) and item.failure is None:
+                item.failure = market_failure(item, provider, operation)
+        return failures
+
+    @staticmethod
     def _failure(error: Exception) -> Reason:
-        errors = error.exceptions if isinstance(error, ExceptionGroup) else (error,)
+        errors = market_errors(error)
         if any(not isinstance(item, (InvalidCycle, MarketDataError, TimeoutError)) for item in errors):
             raise error
+        if any(isinstance(item, MarketIdentityError) for item in errors):
+            return Reason.MARKET_IDENTITY_MISMATCH
         for item in errors:
-            if isinstance(item, MarketIdentityError):
-                return Reason.MARKET_IDENTITY_MISMATCH
             if isinstance(item, InvalidCycle):
                 return item.reason
             if isinstance(item, StaleSnapshot):
@@ -420,10 +470,19 @@ class OpportunityCoordinator:
             observations = (None, None)
             try:
                 pool, book, dex_completed = await self._read()
+                if self.on_market_failure and isinstance(self.dex, SaucerSwap):
+                    diagnostics = self.dex.failures
+                    if self.cex.rest_failure is not None:
+                        diagnostics = (*diagnostics, self.cex.rest_failure)
+                    for failure in diagnostics:
+                        self.on_market_failure(cycle_id, failure)
                 observations = self._observations(pool, book, dex_completed)
                 market = self._market(pool, book, observations, self._now())
             except (InvalidCycle, MarketDataError, TimeoutError, ExceptionGroup) as error:
                 reason = self._failure(error)
+                if self.on_market_failure:
+                    for item in market_errors(error):
+                        self.on_market_failure(cycle_id, market_failure(item))
             with self.storage.transaction() as tx:
                 result = self._record(tx, cycle_id, worker_id, market, reason, observations)
             recorded = True

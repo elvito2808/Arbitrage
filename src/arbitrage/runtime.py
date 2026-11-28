@@ -23,19 +23,23 @@ from .console import ConsoleSink
 from .config import Config, load_config
 from .coordinator import MIN_INTERVAL, NETWORK, InvalidCycle, OpportunityCoordinator
 from .market_data import (
-    KUCOIN, MIRROR, RPC, MarketDataError, ProviderRateLimited, ProviderTimeout, PublicConnections, Unavailable, utc_now,
+    KUCOIN, MIRROR, RPC, MarketDataError, PublicConnections, Unavailable, market_errors, market_failure, utc_now,
 )
 from .monitor import Monitor
 from .models import EXPERIMENT_DURATION, Holding, Reason, Side, Worker, WorkerState, normalize_time
 from .operational_log import Event, Level, OperationalLog
 from .readiness import Check, Diagnostic, Outcome, ReadinessState, StartupBlocked
-from .saucerswap import CHAIN_ID, PAIR, ROUTER, HederaIdentityError, gas_cost_tinybars
+from .saucerswap import CHAIN_ID, PAIR, ROUTER, gas_cost_tinybars
 from .simulation import MAX_ATTEMPTS, SimulationEngine
 from .storage import Storage
 
 WORKERS = ("worker-1", "worker-2", "worker-3")
 POLL_SECONDS = 0.25
 STARTUP_RETRY_DELAYS = (5, 10, 20)
+IDENTITY_DIAGNOSTICS = frozenset({
+    Diagnostic.MARKET_IDENTITY_MISMATCH, Diagnostic.BLOCK_NUMBER_MISMATCH,
+    Diagnostic.BLOCK_HASH_MISMATCH, Diagnostic.BLOCK_TIMESTAMP_MISMATCH,
+})
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS runtime_sessions (
         id TEXT PRIMARY KEY, worker_id TEXT NOT NULL REFERENCES workers(id),
@@ -295,8 +299,15 @@ class Runtime:
             if row and (not readiness or readiness["state"] != ReadinessState.RUNNING):
                 if workers.get(row["worker_id"]) == WorkerState.RUNNING:
                     workers[row["worker_id"]] = WorkerState.STOPPED
+            if not owner_present:
+                runtime_state = "stopped"
+            elif readiness:
+                runtime_state = readiness["state"].lower()
+            else:
+                runtime_state = "owner_present"
             return {
                 "mode": "simulation", "session": session,
+                "session_intent": row["state"] if row else None, "runtime_state": runtime_state,
                 "foreground_owner_present": owner_present,
                 "emergency_latched": emergency,
                 "analysis_cycles": tx._db.execute("SELECT count(*) FROM analysis_cycles").fetchone()[0],
@@ -363,14 +374,16 @@ class Runtime:
                       retry_exhausted=exhausted)
         self._health(public, engine)
 
-    def _check(self, worker, check, outcome, reason=None, **evidence):
+    def _check(self, worker, check, outcome, reason=None, *, failure=None, **evidence):
         self.readiness["checks"][check] = {
             "outcome": outcome, "reason": reason, "at": self.now().isoformat(), **evidence,
         }
+        if failure is not None:
+            self.readiness["checks"][check]["market_failure"] = failure.as_dict()
         level = (Level.ERROR if outcome == Outcome.FAIL else
-                 Level.WARNING if outcome == Outcome.DEGRADED else Level.INFO)
+                 Level.WARNING if failure is not None or outcome == Outcome.DEGRADED else Level.INFO)
         details = {key: evidence[key] for key in (
-            "source", "gas_method", "gas_units", "gas_price_weibars", "capped_tinybars",
+            "source", "chain_id", "gas_method", "gas_units", "gas_price_weibars", "capped_tinybars",
             "estimated_gas_hbar", "maximum_gas_hbar",
         ) if key in evidence}
         if check == Check.HEDERA and outcome == Outcome.PASS:
@@ -380,7 +393,8 @@ class Runtime:
             if key in details:
                 details[key] = Decimal(details[key])
         self.log.emit(Event.READINESS_CHECK, level, worker=worker, session=self.session_id, check=check,
-                      outcome=outcome, diagnostic=reason, attempt=self.readiness["attempt"], **details)
+                      outcome=outcome, diagnostic=reason, attempt=self.readiness["attempt"],
+                      market_failure=failure, **details)
 
     @staticmethod
     def _reconciled(tx):
@@ -450,35 +464,88 @@ class Runtime:
             await self.sleep((due - now).total_seconds())
         return False
 
+    @staticmethod
+    def _market_outcome(failure):
+        if failure.category in {
+            Diagnostic.MARKET_UNAVAILABLE, Diagnostic.PROVIDER_TIMEOUT, Diagnostic.PROVIDER_RATE_LIMITED,
+            Diagnostic.PROVIDER_NETWORK_FAILURE, Diagnostic.MIRROR_INDEXING_DELAY,
+        } or (failure.category == Diagnostic.PROVIDER_HTTP_ERROR
+              and failure.http_status in (408, 500, 502, 503, 504)):
+            return Outcome.DEGRADED
+        return Outcome.FAIL
+
+    def _provider_checks(self, engine, worker, results, failures):
+        by_provider = {}
+        for failure in failures:
+            by_provider.setdefault(failure.provider, failure)
+        for check, provider, verified in (
+            (Check.RPC, "hedera_rpc", engine.dex.rpc_verified),
+            (Check.MIRROR, "hedera_mirror", engine.dex.mirror_verified),
+        ):
+            failure = by_provider.get(provider)
+            if verified and (check == Check.RPC or failure is None):
+                self._check(worker, check, Outcome.PASS, **({"chain_id": CHAIN_ID} if check == Check.RPC else {}))
+            elif failure:
+                self._check(worker, check, self._market_outcome(failure), failure.category, failure=failure)
+        pool = results.get("dex")
+        if pool is not None and pool.router_verified:
+            self._check(worker, Check.HEDERA, Outcome.PASS)
+        else:
+            failure = next((failure for failure in failures if failure.provider in (
+                "hedera_mirror", "hedera_rpc", "saucerswap",
+            )), None)
+            if failure:
+                self._check(worker, Check.HEDERA, self._market_outcome(failure), failure.category, failure=failure)
+            elif pool is not None:
+                self._check(worker, Check.HEDERA, Outcome.UNKNOWN, Diagnostic.ROUTE_CONTEXT_UNVERIFIED)
+        book = results.get("cex")
+        rest_failure = engine.cex.rest_failure or by_provider.get("kucoin_rest")
+        if book is not None:
+            self._check(worker, Check.KUCOIN, Outcome.PASS, source=book.source)
+        elif rest_failure is not None:
+            self._check(worker, Check.KUCOIN, self._market_outcome(rest_failure), rest_failure.category,
+                        failure=rest_failure)
+        websocket = engine.cex.depth_stream.current()
+        if websocket is not None:
+            self._check(worker, Check.WEBSOCKET, Outcome.PASS)
+        elif book is not None and book.source == "rest":
+            self._check(worker, Check.WEBSOCKET, Outcome.DEGRADED)
+        if engine.cex.rest_verified:
+            self._check(worker, Check.REST, Outcome.PASS)
+        elif rest_failure is not None:
+            self._check(worker, Check.REST, self._market_outcome(rest_failure), rest_failure.category,
+                        failure=rest_failure)
+
     async def _preflight_market(self, engine, worker):
+        results = {}
+        engine.cex.rest_verified = False
+        engine.cex.rest_failure = None
         try:
-            pool, book, completed = await engine._read()
-            self._check(worker, Check.HEDERA, Outcome.PASS if pool.router_verified else Outcome.UNKNOWN)
+            pool, book, completed = await engine._read(on_result=results.__setitem__)
             observations = engine._observations(pool, book, completed)
             market = engine._market(pool, book, observations, self.now())
-            self._check(worker, Check.KUCOIN, Outcome.PASS, source=book.source)
-            self._check(worker, Check.WEBSOCKET,
-                        Outcome.PASS if book.source == "websocket" else Outcome.DEGRADED)
-            self._check(worker, Check.REST, Outcome.PASS if book.source == "rest" else Outcome.UNKNOWN)
-            self._check(worker, Check.SNAPSHOTS, Outcome.PASS,
-                        dex=observations[0].model_dump(mode="json"), cex=observations[1].model_dump(mode="json"))
         except (InvalidCycle, MarketDataError, TimeoutError, ExceptionGroup) as error:
             reason = engine._failure(error)
-            diagnostic = {
-                Reason.MARKET_IDENTITY_MISMATCH: Diagnostic.MARKET_IDENTITY_MISMATCH,
-                Reason.MARKET_UNAVAILABLE: Diagnostic.MARKET_UNAVAILABLE,
-            }.get(reason, Diagnostic.MARKET_UNVERIFIED)
-            errors = error.exceptions if isinstance(error, ExceptionGroup) else (error,)
-            if reason != Reason.MARKET_IDENTITY_MISMATCH:
-                if any(isinstance(item, ProviderRateLimited) for item in errors):
-                    diagnostic = Diagnostic.PROVIDER_RATE_LIMITED
-                elif any(isinstance(item, (ProviderTimeout, TimeoutError)) for item in errors):
-                    diagnostic = Diagnostic.PROVIDER_TIMEOUT
-            if any(isinstance(item, HederaIdentityError) for item in errors):
-                self._check(worker, Check.HEDERA, Outcome.FAIL, diagnostic)
-            self._check(worker, Check.SNAPSHOTS, Outcome.FAIL if reason == Reason.MARKET_IDENTITY_MISMATCH
-                        else Outcome.UNKNOWN, diagnostic)
-            return diagnostic, reason == Reason.MARKET_IDENTITY_MISMATCH
+            failures = tuple(dict.fromkeys(market_failure(item) for item in market_errors(error)))
+            self.readiness["market_failures"] = [failure.as_dict() for failure in failures]
+            self._provider_checks(engine, worker, results, failures)
+            critical = reason == Reason.MARKET_IDENTITY_MISMATCH
+            primary = next((failure for failure in failures if failure.category in IDENTITY_DIAGNOSTICS),
+                           failures[0]) if critical else failures[0]
+            outcome = Outcome.FAIL if critical else Outcome.UNKNOWN
+            self._check(worker, Check.SNAPSHOTS, outcome, primary.category, failure=primary)
+            return primary.category, critical
+
+        diagnostics = engine.dex.failures
+        if engine.cex.rest_failure is not None:
+            diagnostics = (*diagnostics, engine.cex.rest_failure)
+        self.readiness["market_failures"] = [failure.as_dict() for failure in diagnostics]
+        self._provider_checks(engine, worker, results, diagnostics)
+        self._check(worker, Check.SNAPSHOTS, Outcome.PASS,
+                    dex=observations[0].model_dump(mode="json"), cex=observations[1].model_dump(mode="json"))
+
+        if not pool.router_verified and engine.dex.router_failure is not None:
+            return engine.dex.router_failure.category, False
 
         failures = []
         budgets = {}
@@ -562,7 +629,8 @@ class Runtime:
             if not await self._network_slot(worker, reserve=True):
                 return False
             self.readiness["attempt"] = retry + 1
-            for check in (Check.HEDERA, Check.KUCOIN, Check.WEBSOCKET, Check.REST, Check.SNAPSHOTS,
+            self.readiness["market_failures"] = []
+            for check in (Check.HEDERA, Check.RPC, Check.MIRROR, Check.KUCOIN, Check.WEBSOCKET, Check.REST, Check.SNAPSHOTS,
                           Check.BUY_GAS, Check.SELL_GAS, Check.BALANCES):
                 self.readiness["checks"][check] = {"outcome": Outcome.UNKNOWN, "reason": None, "at": None}
             self._readiness_state(public, engine, worker, ReadinessState.PREFLIGHT_CHECKING)
@@ -589,6 +657,13 @@ class Runtime:
             await self.sleep(min(delay, remaining))
         return False
 
+    def _log_cycle_market_failure(self, worker, cycle, failure):
+        if failure.category in IDENTITY_DIAGNOSTICS and self._critical_cycle is None:
+            self._critical_cycle = failure.category
+        level = Level.ERROR if self._market_outcome(failure) == Outcome.FAIL else Level.WARNING
+        self.log.emit(Event.MARKET_FAILURE, level, worker=worker, session=self.session_id,
+                      cycle=cycle, market_failure=failure)
+
     async def _cycles(self, engine, public, worker_id, config):
         if not await self._startup(engine, public, worker_id, config):
             return
@@ -608,7 +683,9 @@ class Runtime:
                               cache_hits=engine.dex.cache_hits + engine.cex.cache_hits)
             self._health(public, engine, cycle)
             await self._recover(engine)
-            if any(item.reason == Reason.MARKET_IDENTITY_MISMATCH for item in cycle.evaluations):
+            if self._critical_cycle is None and any(
+                item.reason == Reason.MARKET_IDENTITY_MISMATCH for item in cycle.evaluations
+            ):
                 self._critical_cycle = Diagnostic.MARKET_IDENTITY_MISMATCH
             if self._critical_cycle:
                 self._block(public, engine, worker_id, self._critical_cycle)
@@ -668,6 +745,9 @@ class Runtime:
             public.before_request = before_request
             engine = SimulationEngine.from_public(self.storage, config.simulation, public)
             engine.session_id = self.session_id
+            engine.on_market_failure = lambda cycle, failure: self._log_cycle_market_failure(
+                worker_id, cycle, failure,
+            )
             if self.monitor:
                 self._observe("startup", config, engine)
                 engine.on_cycle_start = lambda cycle: self._observe("cycle_start", cycle)

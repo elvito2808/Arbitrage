@@ -2,16 +2,17 @@
 
 import asyncio
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from urllib.parse import urlsplit
 
 from .market_data import (
     MAX_AGE, RPC, TRADE_UNITS, MarketDataError, MarketIdentityError, PublicConnections, ProviderRateLimited, ProviderTimeout,
-    Unavailable, require_fresh,
+    BlockIdentityMismatch, BlockNotFound, MarketFailure, StaleSnapshot, Unavailable, market_errors, market_failure, require_fresh,
 )
 from .config import DEFAULT_GAS_LIMIT, DEFAULT_GAS_UNITS, Simulation
+from .readiness import Diagnostic
 from .models import (
     Asset, ConfiguredGasProvenance, HederaGasProvenance, Identifier, MarketQuote, PositiveUnits, Record, Side, Venue,
 )
@@ -148,12 +149,23 @@ class SaucerSwap:
             settings.sell_gas_units if settings else DEFAULT_GAS_UNITS,
         )
         self.gas_limit = settings.gas_limit if settings else DEFAULT_GAS_LIMIT
+        self.rpc_verified = False
+        self.mirror_verified = False
+        self.failures: tuple[MarketFailure, ...] = ()
+        self.router_failure: MarketFailure | None = None
         self._cached: PoolSnapshot | None = None
         self._lock = asyncio.Lock()
 
     async def _call(self, address: str, data: str, block: str, length: int) -> tuple[int, ...]:
         result = await self.public.rpc("eth_call", {"to": address, "data": "0x" + data}, block)
-        return words(result, length)
+        try:
+            return words(result, length)
+        except MarketDataError as error:
+            error.failure = MarketFailure(
+                "hedera_rpc", "eth_call", Diagnostic.INVALID_PROVIDER_RESPONSE,
+                http_status=200, expected_block=int(block, 16), field="result",
+            )
+            raise
 
     async def _gas_price(self) -> tuple[datetime | None, int | None, str | None]:
         try:
@@ -212,10 +224,15 @@ class SaucerSwap:
             data += "".join(address_word(address) for address in path)
             try:
                 quoted = await self._call(ROUTER, data, block, 4)
-            except Unavailable:
+            except Unavailable as error:
+                if self.router_failure is None:
+                    self.router_failure = market_failure(error, "saucerswap", "router_quote")
                 return False
             if quoted != expected:
-                raise MarketDataError("SaucerSwap router and integer quote disagree")
+                raise MarketDataError("SaucerSwap router and integer quote disagree", MarketFailure(
+                    "saucerswap", "router_quote", Diagnostic.ROUTER_QUOTE_MISMATCH,
+                    expected_block=int(block, 16),
+                ))
             return True
 
         results = await asyncio.gather(
@@ -228,62 +245,204 @@ class SaucerSwap:
                 raise result
         return all(results)
 
-    async def _read(self) -> PoolSnapshot:
-        if await self.public.rpc("eth_chainId") != hex(CHAIN_ID):
-            raise HederaIdentityError("expected Hedera chain ID 295")
-        block = await self.public.rpc("eth_getBlockByNumber", "latest", False)
-        header_received = self.public.clock()
+    async def _rpc_header(self) -> tuple[int, str, datetime]:
+        raw_chain = await self.public.rpc("eth_chainId")
         try:
-            number = int(block["number"], 16)
-            block_hash = block["hash"]
-            block_timestamp = int(block["timestamp"], 16)
-            if not isinstance(block_hash, str) or not re.fullmatch(r"0x[0-9a-f]{64}", block_hash):
-                raise ValueError("invalid block hash")
-        except (KeyError, TypeError, ValueError):
-            raise MarketDataError("invalid Hedera RPC block") from None
-        tag = hex(number)
-        async with asyncio.TaskGroup() as group:
-            mirror = group.create_task(self.public.mirror_block(number))
-            factory_pair = group.create_task(self._call(
-                FACTORY, "e6a43905" + address_word(USDC) + address_word(WHBAR), tag, 1
+            chain = quantity(raw_chain, 0, 2**64 - 1)
+        except MarketDataError:
+            raise MarketDataError("invalid Hedera RPC chain ID", MarketFailure(
+                "hedera_rpc", "eth_chainId", Diagnostic.INVALID_PROVIDER_RESPONSE, http_status=200, field="result",
+            )) from None
+        if chain != CHAIN_ID:
+            raise HederaIdentityError("expected Hedera chain ID 295", MarketFailure(
+                "hedera_rpc", "eth_chainId", Diagnostic.MARKET_IDENTITY_MISMATCH, http_status=200,
             ))
-            token0 = group.create_task(self._call(PAIR, "0dfe1681", tag, 1))
-            token1 = group.create_task(self._call(PAIR, "d21220a7", tag, 1))
-            decimals0 = group.create_task(self._call(USDC, "313ce567", tag, 1))
-            decimals1 = group.create_task(self._call(WHBAR, "313ce567", tag, 1))
-            reserves = group.create_task(self._call(PAIR, "0902f1ac", tag, 3))
-        received = self.public.clock()
-        expected = (
-            (int(PAIR, 16),), (int(USDC, 16),), (int(WHBAR, 16),), (6,), (8,),
-        )
-        if tuple(task.result() for task in (factory_pair, token0, token1, decimals0, decimals1)) != expected:
-            raise HederaIdentityError("SaucerSwap factory, token ordering or decimals mismatch")
+        block = await self.public.rpc("eth_getBlockByNumber", "latest", False)
+        values = {}
+        for field in ("number", "hash", "timestamp") if isinstance(block, dict) else ("response",):
+            raw = block.get(field) if isinstance(block, dict) else None
+            try:
+                if field == "hash" and isinstance(raw, str) and re.fullmatch(r"0x[0-9a-fA-F]{64}", raw):
+                    values[field] = raw.lower()
+                elif field == "number":
+                    values[field] = quantity(raw, 1, 2**63 - 1)
+                elif field == "timestamp":
+                    values[field] = datetime.fromtimestamp(quantity(raw, 1, 253402300799), UTC)
+                else:
+                    raise ValueError
+            except (ValueError, OverflowError, OSError):
+                raise MarketDataError("invalid Hedera RPC block", MarketFailure(
+                    "hedera_rpc", "eth_getBlockByNumber", Diagnostic.INVALID_PROVIDER_RESPONSE,
+                    http_status=200, field=field, hash_class="invalid_rpc_32_byte_hash" if field == "hash" else None,
+                )) from None
+        self.rpc_verified = True
+        return values["number"], values["hash"], values["timestamp"]
+
+    async def _mirror_block(self, number: int, header_at: datetime, header_received: datetime) -> dict:
         try:
-            mirror_data = mirror.result()
-            seconds, _, fraction = mirror_data["timestamp"]["to"].partition(".")
-            source = datetime.fromtimestamp(int(seconds), UTC).replace(
-                microsecond=int(fraction[:6].ljust(6, "0"))
-            )
-            if (
-                mirror_data["number"] != number
-                or mirror_data["hash"][:66] != block_hash
-                or abs(block_timestamp - int(seconds)) > 2
-            ):
-                raise MarketDataError("Hedera block provenance mismatch")
-        except (KeyError, TypeError, ValueError, OverflowError, OSError) as exc:
-            if isinstance(exc, MarketDataError):
-                raise
-            raise MarketDataError("invalid Hedera mirror block") from None
-        require_fresh(source, header_received, received, self.cache_age)
-        usdc, whbar, update = reserves.result()
+            return await self.public.mirror_block(number)
+        except BlockNotFound:
+            pass
+        try:
+            head = await self.public.mirror_head()
+        except MarketDataError as error:
+            error.failure = replace(market_failure(error, "hedera_mirror", "latest_indexed_block"),
+                                    expected_block=number, lookup_http_status=404)
+            raise
+        blocks = head.get("blocks") if isinstance(head, dict) else None
+        if not isinstance(blocks, list) or len(blocks) != 1 or not isinstance(blocks[0], dict):
+            raise MarketDataError("invalid Mirror latest block list", MarketFailure(
+                "hedera_mirror", "latest_indexed_block", Diagnostic.INVALID_PROVIDER_RESPONSE,
+                http_status=200, lookup_http_status=404, field="blocks", expected_block=number,
+            ))
+        indexed = blocks[0].get("number")
+        if type(indexed) is not int or not 0 <= indexed < 2**63:
+            raise MarketDataError("invalid Mirror latest block number", MarketFailure(
+                "hedera_mirror", "latest_indexed_block", Diagnostic.INVALID_PROVIDER_RESPONSE,
+                http_status=200, lookup_http_status=404, field="number", expected_block=number,
+            ))
+        now = self.public.clock()
+        details = dict(http_status=404, expected_block=number, observed_block=indexed,
+                       source_age_ms=(now - header_at) // timedelta(milliseconds=1),
+                       receipt_age_ms=(now - header_received) // timedelta(milliseconds=1))
+        if indexed >= number:
+            raise MarketDataError("requested Mirror block absent although the index reached it", MarketFailure(
+                "hedera_mirror", "block_by_number", Diagnostic.BLOCK_NOT_FOUND, **details,
+            ))
+        lag = Unavailable("Mirror index is behind the requested block", MarketFailure(
+            "hedera_mirror", "block_by_number", Diagnostic.MIRROR_INDEXING_DELAY, **details,
+        ))
+        # Keep the same RPC block. Leave clock/freshness, transport cooldown,
+        # and the enclosing deadlines in control of this bounded wait.
+        for delay in (0.25, 0.5):
+            now = self.public.clock()
+            if now - min(header_at, header_received) + timedelta(seconds=delay) >= self.cache_age:
+                break
+            await self.public.sleep(delay)
+            try:
+                require_fresh(header_at, header_received, self.public.clock(), self.cache_age)
+            except StaleSnapshot:
+                break
+            self.public.retries += 1
+            try:
+                return await self.public.mirror_block(number)
+            except BlockNotFound:
+                pass
+        raise lag
+
+    async def _mirror_source(self, number: int, block_hash: str, header_at: datetime,
+                             header_received: datetime) -> datetime:
+        try:
+            block = await self._mirror_block(number, header_at, header_received)
+        except MarketDataError as error:
+            error.failure = replace(market_failure(error, "hedera_mirror", "block_by_number"),
+                                    expected_block=number)
+            raise
+
+        def invalid(field, **details):
+            return MarketDataError("invalid Hedera mirror block", MarketFailure(
+                "hedera_mirror", "block_match", Diagnostic.INVALID_PROVIDER_RESPONSE,
+                http_status=200, field=field, expected_block=number, **details,
+            ))
+
+        if not isinstance(block, dict):
+            raise invalid("response")
+        observed = block.get("number")
+        if type(observed) is not int or not 0 <= observed < 2**63:
+            raise invalid("number")
+        hash_text = block.get("hash")
+        if not isinstance(hash_text, str) or not re.fullmatch(r"(?:0[xX])?[0-9a-fA-F]{96}", hash_text):
+            raise invalid("hash", observed_block=observed, hash_class="invalid_mirror_48_byte_hash")
+        mirror_hash = hash_text[-96:].lower()
+        timestamp = block.get("timestamp")
+        if not isinstance(timestamp, dict):
+            raise invalid("timestamp", observed_block=observed)
+        end = timestamp.get("to")
+        if not isinstance(end, str) or not re.fullmatch(r"[0-9]{1,12}\.[0-9]{1,9}", end):
+            raise invalid("timestamp.to", observed_block=observed)
+        seconds, fraction = end.split(".")
+        try:
+            source = datetime.fromtimestamp(int(seconds), UTC).replace(microsecond=int(fraction[:6].ljust(6, "0")))
+        except (ValueError, OverflowError, OSError):
+            raise invalid("timestamp.to", observed_block=observed) from None
+        delta_ms = (source - header_at) // timedelta(milliseconds=1)
+        if observed != number:
+            category, field, hash_class = Diagnostic.BLOCK_NUMBER_MISMATCH, "number", None
+        elif mirror_hash[:64] != block_hash[2:]:
+            category, field, hash_class = Diagnostic.BLOCK_HASH_MISMATCH, "hash", "prefix_mismatch"
+        elif abs(source.replace(microsecond=0) - header_at) > timedelta(seconds=2):
+            category, field, hash_class = Diagnostic.BLOCK_TIMESTAMP_MISMATCH, "timestamp.to", None
+        else:
+            self._block_freshness(number, source, header_received, self.public.clock())
+            self.mirror_verified = True
+            return source
+        raise BlockIdentityMismatch("Hedera block provenance mismatch", MarketFailure(
+            "hedera_mirror", "block_match", category, http_status=200, expected_block=number,
+            observed_block=observed, field=field, hash_class=hash_class, timestamp_delta_ms=delta_ms,
+        ))
+
+    def _block_freshness(self, number: int, source: datetime, received: datetime, now: datetime) -> None:
+        try:
+            require_fresh(source, received, now, self.cache_age)
+        except StaleSnapshot:
+            raise StaleSnapshot("Hedera block is stale or outside clock skew tolerance", MarketFailure(
+                "hedera_mirror", "block_freshness", Diagnostic.STALE_SNAPSHOT, expected_block=number,
+                observed_block=number, source_age_ms=(now - source) // timedelta(milliseconds=1),
+                receipt_age_ms=(now - received) // timedelta(milliseconds=1),
+            )) from None
+
+    async def _pool_reserves(self, number: int) -> tuple[int, ...]:
+        tag = hex(number)
+        requests = (
+            (FACTORY, "e6a43905" + address_word(USDC) + address_word(WHBAR), 1),
+            (PAIR, "0dfe1681", 1), (PAIR, "d21220a7", 1), (USDC, "313ce567", 1),
+            (WHBAR, "313ce567", 1), (PAIR, "0902f1ac", 3),
+        )
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(self._call(address, call, tag, length))
+                     for address, call, length in requests]
+        expected = ((int(PAIR, 16),), (int(USDC, 16),), (int(WHBAR, 16),), (6,), (8,))
+        if tuple(task.result() for task in tasks[:-1]) != expected:
+            raise HederaIdentityError("SaucerSwap factory, token ordering or decimals mismatch", MarketFailure(
+                "saucerswap", "pool_identity", Diagnostic.MARKET_IDENTITY_MISMATCH, expected_block=number,
+            ))
+        return tasks[-1].result()
+
+    async def _read(self) -> PoolSnapshot:
+        number, block_hash, header_at = await self._rpc_header()
+        header_received = self.public.clock()
+        source, reserves = await asyncio.gather(
+            self._mirror_source(number, block_hash, header_at, header_received),
+            self._pool_reserves(number), return_exceptions=True,
+        )
+        for result in (source, reserves):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+        errors = [error for error in (source, reserves) if isinstance(error, Exception)]
+        if errors:
+            raise ExceptionGroup("Hedera verification failed", errors)
+        received = self.public.clock()
+        self._block_freshness(number, source, header_received, received)
+        tag = hex(number)
+        usdc, whbar, update = reserves
         if not 0 <= update < 2**32:
-            raise MarketDataError("invalid pair reserve timestamp")
-        buy, sell = amounts(usdc, whbar)
+            raise MarketDataError("invalid pair reserve timestamp", MarketFailure(
+                "saucerswap", "pool_reserves", Diagnostic.INVALID_PROVIDER_RESPONSE,
+                expected_block=number, field="timestamp",
+            ))
+        try:
+            buy, sell = amounts(usdc, whbar)
+        except MarketDataError as error:
+            error.failure = MarketFailure(
+                "saucerswap", "pool_reserves", Diagnostic.INVALID_PROVIDER_RESPONSE,
+                expected_block=number, field="reserves",
+            )
+            raise
         async with asyncio.TaskGroup() as group:
             router = group.create_task(self._router(tag, buy, sell))
             gas_price = group.create_task(self._gas_price())
         completed = self.public.clock()
-        require_fresh(source, received, completed, self.cache_age)
+        self._block_freshness(number, source, received, completed)
         snapshot_id = f"hedera:295:{number}:{block_hash}"
         return PoolSnapshot(
             number, block_hash, source, received, usdc, whbar, update, router.result(),
@@ -297,33 +456,42 @@ class SaucerSwap:
 
     async def snapshot(self) -> PoolSnapshot:
         async with self._lock:
+            self.rpc_verified = self.mirror_verified = False
+            self.failures = ()
+            self.router_failure = None
             try:
                 try:
                     async with asyncio.timeout(9):
                         snapshot = await self._read()
                 except TimeoutError:
-                    raise ProviderTimeout("pool snapshot deadline exceeded") from None
+                    raise ProviderTimeout("pool snapshot deadline exceeded", MarketFailure(
+                        "saucerswap", "pool_snapshot", Diagnostic.PROVIDER_TIMEOUT,
+                    )) from None
             except (MarketDataError, ExceptionGroup) as exc:
-                errors = exc.exceptions if isinstance(exc, ExceptionGroup) else (exc,)
+                errors = market_errors(exc)
+                self.failures = tuple(dict.fromkeys(
+                    market_failure(error, "saucerswap", "pool_snapshot") for error in errors
+                    if isinstance(error, MarketDataError)
+                ))
                 if all(isinstance(error, Unavailable) for error in errors) and self._cached:
                     try:
-                        require_fresh(
-                            self._cached.source_at, self._cached.received_at,
-                            self.public.clock(), self.cache_age,
+                        self._block_freshness(
+                            self._cached.block, self._cached.source_at, self._cached.received_at, self.public.clock(),
                         )
-                    except MarketDataError:
+                    except MarketDataError as stale:
                         self._cached = None
+                        if any(isinstance(error, MarketDataError) and error.failure for error in errors):
+                            raise ExceptionGroup("Hedera refresh failed and cache is stale", [stale, *errors]) from None
                         raise
                     self.cache_hits += 1
                     return self._cached
                 self._cached = None
-                if isinstance(exc, ExceptionGroup):
-                    invalid = next((error for error in errors if not isinstance(error, Unavailable)), None)
-                    if invalid is not None:
-                        raise invalid from None
+                if isinstance(exc, ExceptionGroup) and len(errors) == 1:
                     raise errors[0] from None
                 raise
             self._cached = snapshot
+            if self.router_failure is not None:
+                self.failures = (self.router_failure,)
             return snapshot
 
     async def quote(self, side: Side, whbar_units: int) -> MarketQuote:
