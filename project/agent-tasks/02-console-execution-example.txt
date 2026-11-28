@@ -1,0 +1,12 @@
+OFFLINE SYNTHETIC OUTPUT — console formatting example.
+[01:30:30.000] INFO     [SIMULATION] Admitted SIMULATED execution 98d7a29c0c214e87ad88a5f1a3010f43 · DEX → CEX · 1000.00000000 HBAR. Estimated net 2.163572 USDT, stressed 1.625038 USDT. Reserved virtual balances: DEX USDC 53.025571, DEX HBAR gas 1.07069484, KuCoin HBAR 1000.00000000.
+[01:30:30.000] INFO     [SIMULATION] SIMULATED DEX execution 98d7a29c0c214e87ad88a5f1a3010f43 · Attempt 1 started. Reserved virtual balances: DEX USDC 53.025571, DEX HBAR gas 1.07069484, KuCoin HBAR 1000.00000000.
+[01:30:31.000] INFO     [SIMULATION] SIMULATED DEX execution 98d7a29c0c214e87ad88a5f1a3010f43 · Attempt 1 · FILL. Filled 1000.00000000 WHBAR for 52.761762 USDC. Gas charged 0.17844914 HBAR. Retained holds: KuCoin HBAR 1000.00000000.
+[01:30:31.000] INFO     [BALANCE] DEX HBAR gas · Previous 1000.00000000, change -0.17844914. Total 999.82155086, reserved 0.00000000, available 999.82155086. Reconciliation PASS.
+[01:30:31.000] INFO     [BALANCE] DEX WHBAR · Previous 50000.00000000, change 1000.00000000. Total 51000.00000000, reserved 0.00000000, available 51000.00000000. Reconciliation PASS.
+[01:30:31.000] INFO     [BALANCE] DEX USDC · Previous 3000.000000, change -52.761762. Total 2947.238238, reserved 0.000000, available 2947.238238. Reconciliation PASS.
+[01:30:31.000] INFO     [SIMULATION] SIMULATED KuCoin execution 98d7a29c0c214e87ad88a5f1a3010f43 · Attempt 1 started. Reserved virtual balances: KuCoin HBAR 1000.00000000.
+[01:30:31.000] INFO     [SIMULATION] SIMULATED KuCoin execution 98d7a29c0c214e87ad88a5f1a3010f43 · Attempt 1 · FILL. Filled 1000.00000000 HBAR for 54.945000 USDT. Fee 0.055000 USDT. Retained holds: none.
+[01:30:31.000] INFO     [BALANCE] KuCoin HBAR · Previous 50000.00000000, change -1000.00000000. Total 49000.00000000, reserved 0.00000000, available 49000.00000000. Reconciliation PASS.
+[01:30:31.000] INFO     [BALANCE] KuCoin USDT · Previous 3000.000000, change 54.945000. Total 3054.945000, reserved 0.000000, available 3054.945000. Reconciliation PASS.
+[01:30:31.000] INFO     [SIMULATION] SIMULATED execution 98d7a29c0c214e87ad88a5f1a3010f43 finished · FILLED. Committed stablecoin changes: DEX -52.761762 USDC, KuCoin 54.945000 USDT. Retained holds: none.

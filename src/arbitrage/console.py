@@ -1,42 +1,248 @@
 """Best-effort foreground stderr sink for closed operational events."""
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal
 from queue import Empty, Full, Queue
 from threading import Event, Thread
 
 from .operational_log import Level
 
 LEVELS = tuple(Level)
-LABELS = {
-    "startup": "SYSTEM", "configuration": "CONFIG", "readiness_state": "HEALTH",
-    "readiness_check": "HEALTH", "connection_status": "KUCOIN", "analysis_start": "ARB",
-    "analysis": "ARB", "evaluation": "ARB", "simulated_execution": "SIMULATION",
-    "balance": "BALANCE", "lifecycle": "SYSTEM", "session_summary": "SYSTEM",
+HOLDINGS = {
+    "dex.WHBAR": "DEX WHBAR", "dex.USDC": "DEX USDC", "dex.HBAR": "DEX HBAR gas",
+    "cex.HBAR": "KuCoin HBAR", "cex.USDT": "KuCoin USDT",
+}
+DIRECTIONS = {"buy_dex": "DEX → CEX", "sell_dex": "CEX → DEX"}
+SOURCES = {"websocket": "WebSocket", "rest": "REST", "unavailable": "unavailable"}
+CHECKS = {
+    "configuration": ("CONFIG", "Simulation configuration validation"),
+    "storage": ("STORAGE", "SQLite initialization and integrity validation"),
+    "recovery": ("RECOVERY", "Prior virtual executions and outstanding holds"),
+    "hedera": ("HEDERA", "Hedera RPC and chain identity"),
+    "kucoin": ("KUCOIN", "Market identity and depth"),
+    "kucoin_websocket": ("KUCOIN", "WebSocket depth"),
+    "kucoin_rest": ("KUCOIN", "REST depth"),
+    "snapshots": ("HEALTH", "Market snapshot freshness and consistency"),
+    "buy_gas": ("GAS", "DEX BUY gas"),
+    "sell_gas": ("GAS", "DEX SELL gas"),
+    "balances": ("BALANCE", "Virtual funding for both directions"),
+}
+LIFECYCLE = {
+    "paused": "Session paused.", "stopped": "Session stopped.",
+    "emergency": "Emergency stop latched.", "expired": "Session expired.",
+    "shutdown": "Foreground shutdown requested.", "startup_blocked": "Session blocked by readiness.",
+    "interrupted": "Foreground session interrupted.", "running": "Session active.",
+}
+DIAGNOSTICS = {
+    "gas_unknown": "Gas price unavailable", "gas_invalid": "Gas data invalid or stale",
+    "profit_threshold": "Net profit did not exceed the threshold",
+    "maximum_loss": "Stressed loss exceeds the configured limit",
+    "insufficient_balance": "Insufficient available virtual balance",
+    "cross_venue_skew": "Market timestamps are too far apart",
+    "stale_or_invalid_clock": "Stale market data or invalid clock",
+    "route_estimate_invalid": "Invalid or stale gas inputs",
+    "route_context_unverified": "SaucerSwap router quote could not be verified",
+    "gas_price_unavailable": "RPC gas price unavailable",
+    "gas_price_invalid": "RPC gas price invalid",
+    "websocket_unavailable": "WebSocket unavailable",
+    "fresh_depth": "Fresh depth available", "no_fresh_depth": "No fresh depth available",
+    "recovery_unresolved": "A prior virtual execution or hold remains unresolved",
 }
 
 
-def render(record):
-    at = datetime.fromisoformat(record["at"])
+def value(record, key, unit=""):
+    result = record.get(key)
+    return "UNKNOWN" if result is None else f"{result}{unit}"
+
+
+def diagnosis(code):
+    return DIAGNOSTICS.get(code, (code or "unknown").replace("_", " ").capitalize())
+
+
+def holds(record):
+    amounts = [f"{name} {value(record, key)}" for key, name in HOLDINGS.items()
+               if record.get(key) is not None and Decimal(record[key]) != 0]
+    if any(record.get(key) is None for key in HOLDINGS):
+        amounts.append("other amounts UNKNOWN" if amounts else "UNKNOWN")
+    return ", ".join(amounts) or "none"
+
+
+def readiness_check(record):
+    check = record.get("check")
+    module, subject = CHECKS.get(check, ("HEALTH", "Readiness check"))
+    result = value(record, "outcome")
+    reason = record.get("diagnostic")
+    message = f"{result} · {subject}"
+    if reason:
+        message += f". {diagnosis(reason)}"
+    if check == "kucoin" and record.get("source"):
+        message += f" via {SOURCES[record['source']]}"
+    if check == "hedera" and result == "PASS":
+        yield module, f"PASS · Hedera RPC verified chain ID {value(record, 'chain_id')}. Mirror corroborated the block."
+        yield "DEX", (f"PASS · SaucerSwap {value(record, 'pair')} token identity and decimals verified. "
+                      f"Pool {value(record, 'pool')}, router 0.0.{value(record, 'router_number')}.")
+    elif check in ("buy_gas", "sell_gas") and result == "PASS":
+        yield module, (f"{message}. RPC price {value(record, 'gas_price_weibars', ' weibars per gas')}. "
+                       f"Estimated cost {value(record, 'estimated_gas_hbar', ' HBAR')}, "
+                       f"maximum budget {value(record, 'maximum_gas_hbar', ' HBAR')}.")
+    else:
+        yield module, f"{message}."
+
+
+def evaluate(record):
+    def v(key, unit=""):
+        return value(record, key, unit)
+
+    dex_side = v("dex_side").upper()
+    cex_side = v("cex_side").upper()
+    if dex_side == "UNKNOWN":
+        dex_side = "BUY" if record.get("direction") == "buy_dex" else "SELL"
+    if cex_side == "UNKNOWN":
+        cex_side = "SELL" if dex_side == "BUY" else "BUY"
+    yield "DEX", f"{dex_side} {v('trade_hbar', ' WHBAR')} · gross quote {v('dex_usdc', ' USDC')}."
+    yield "KUCOIN", (f"{cex_side} {v('trade_hbar', ' HBAR')} · fee-inclusive quote {v('cex_usdt', ' USDT')} "
+                     f"via {SOURCES.get(record.get('source'), 'UNKNOWN')}.")
+    yield "GAS", (f"DEX {dex_side} estimated cost {v('gas_estimated_hbar', ' HBAR')} / "
+                  f"{v('gas_estimated_usdt', ' USDT')}. Maximum budget {v('gas_capped_hbar', ' HBAR')} / "
+                  f"{v('gas_capped_usdt', ' USDT')}.")
+    direction = DIRECTIONS.get(record.get("direction"), "UNKNOWN")
+    reason = record.get("reason")
+    guard = record.get("guard")
+    gas_error = record.get("gas_error")
+    detail = f" · {diagnosis(reason)}" if reason else ""
+    if gas_error and gas_error != reason:
+        detail += f" · {diagnosis(gas_error)}"
+    if guard:
+        detail += f" · Admission blocked: {diagnosis(guard)}"
+    yield "ARB", (f"{direction} · Indicative {v('indicative_usdt', ' USDT')}, net {v('net_usdt', ' USDT')}, "
+                  f"stressed {v('stressed_usdt', ' USDT')}. {v('status').upper()}{detail}. "
+                  f"Admission {v('admission').replace('_', ' ')}.")
+
+
+def execution(record):
+    phase = record.get("phase")
+    identifier = value(record, "execution")
+    result = value(record, "result").replace("_", " ").upper()
+    venue = {"dex": "DEX", "cex": "KuCoin"}.get(record.get("venue"), "UNKNOWN venue")
+    retained = holds(record)
+    if phase == "admitted":
+        direction = DIRECTIONS.get(record.get("direction"), "UNKNOWN")
+        return "SIMULATION", (f"Admitted SIMULATED execution {identifier} · {direction} · "
+                              f"{value(record, 'trade_hbar', ' HBAR')}. Estimated net "
+                              f"{value(record, 'net_usdt', ' USDT')}, stressed {value(record, 'stressed_usdt', ' USDT')}. "
+                              f"Reserved virtual balances: {retained}.")
+    if phase == "recovery":
+        return "RECOVERY", f"Recovering SIMULATED execution {identifier} · journal status {result}. Retained holds: {retained}."
+    if phase in ("attempt", "result"):
+        attempt = record.get("attempt")
+        label = "Retry attempt" if isinstance(attempt, int) and attempt > 1 else "Attempt"
+        message = f"SIMULATED {venue} execution {identifier} · {label} {value(record, 'attempt')}"
+        if phase == "attempt":
+            return "SIMULATION", f"{message} started. Reserved virtual balances: {retained}."
+        is_dex = record.get("venue") == "dex"
+        amount = value(record, "fill_usdc", " USDC") if is_dex else value(record, "fill_usdt", " USDT")
+        base = " WHBAR" if is_dex else " HBAR"
+        charge = (f"Gas charged {value(record, 'gas_hbar', ' HBAR')}" if is_dex else
+                  f"Fee {value(record, 'fee_usdt', ' USDT')}")
+        filled = f" Filled {value(record, 'filled_hbar', base)} for {amount}." if (
+            record.get("filled_hbar") is not None or result == "UNKNOWN") else ""
+        return "SIMULATION", f"{message} · {result}.{filled} {charge}. Retained holds: {retained}."
+    if phase == "terminal":
+        return "SIMULATION", (f"SIMULATED execution {identifier} finished · {result}. Committed stablecoin changes: "
+                              f"DEX {value(record, 'delta_usdc', ' USDC')}, KuCoin {value(record, 'delta_usdt', ' USDT')}. "
+                              f"Retained holds: {retained}.")
+    return "SIMULATION", f"SIMULATED execution {identifier} requires review. Retained holds: {retained}."
+
+
+def messages(record, at):
+    def v(key, unit=""):
+        return value(record, key, unit)
+
     event = record["event"]
-    prefix = f"[{at:%H:%M:%S}.{at.microsecond // 1000:03d}] {record['level'].upper()} [{LABELS.get(event, 'SYSTEM')}]"
-    labels = {
-        "startup": f"Starting SIMULATION ONLY ({at:%Y-%m-%d} UTC); foreground logger active; real trading disabled",
-        "configuration": "Applied simulation configuration",
-        "readiness_state": record.get("state", "UNKNOWN"),
-        "readiness_check": "Readiness check",
-        "analysis_start": "Analysis started",
-        "analysis": "Analysis completed",
-        "evaluation": "Direction evaluated",
-        "simulated_execution": "SIMULATED execution",
-        "balance": "Persisted balance",
-        "connection_status": "KuCoin source changed",
-        "lifecycle": "Session lifecycle",
-        "session_summary": "Session summary",
-    }
-    fields = " ".join(f"{key}={record[key] if record[key] is not None else 'UNKNOWN'}"
-                      for key in record if key not in {"at", "level", "event", "state"})
-    return f"{prefix} {labels.get(event, event)}{(' ' + fields) if fields else ''}"
+    worker = f"WORKER-{record['worker'][-1]:0>2}" if record.get("worker") else "ARB"
+    check = f"CHECK #{record['number']:03d}" if record.get("number") is not None else "Check"
+    if event == "startup":
+        yield "SYSTEM", f"Arbitrage Bot Starting ({at:%Y-%m-%d} UTC)."
+        yield "LOGGER", "Foreground logger initialized on stderr."
+        yield "SECURITY", "SIMULATION ONLY. Real trading, wallet signing and order submission are disabled."
+    elif event == "configuration":
+        yield "CONFIG", f"Applied simulation configuration · {v('dex_market')} on Hedera and {v('market')} on KuCoin."
+        yield "CONFIG", (f"Workers {v('capacity')}, active limit {v('active_limit')}. Trade quantity {v('trade_hbar', ' HBAR')}. "
+                         f"Minimum profit {v('profit_usdt', ' USDT')}, maximum loss {v('loss_usdt', ' USDT')}.")
+        yield "CONFIG", (f"Slippage fraction {v('slippage')}, KuCoin fee fraction {v('fee')}, gas multiplier {v('gas_cap', '×')}. "
+                         f"Snapshot TTL {v('ttl_seconds', ' s')}, cycle interval {v('interval_seconds', ' s')}. "
+                         f"Session deadline {v('deadline')}. USDC/USDT parity {'enabled' if record.get('parity') else 'UNKNOWN'}.")
+        yield "GAS", (f"{v('gas_method')}. BUY {v('buy_gas_units', ' gas units')}, SELL {v('sell_gas_units', ' gas units')}, "
+                      f"validation limit {v('gas_limit')}.")
+    elif event == "readiness_check":
+        yield from readiness_check(record)
+    elif event == "readiness_state":
+        state = record.get("state")
+        reason = diagnosis(record.get("diagnostic"))
+        if state == "WAITING_RETRY":
+            delay = v("delay_seconds", " s")
+            wait = f"Retry in {delay}." if record.get("next_attempt_at") else f"Session expires in {delay} before another retry."
+            yield "HEALTH", f"WAITING_RETRY · Attempt {v('attempt')}. {reason}. {wait}"
+        elif state == "STARTUP_BLOCKED":
+            suffix = " Retry budget exhausted." if record.get("retry_exhausted") else ""
+            yield "HEALTH", f"STARTUP_BLOCKED · Attempt {v('attempt')}. {reason}.{suffix}"
+        elif state == "RUNNING":
+            yield worker, "RUNNING · Readiness verified."
+        else:
+            message = {
+                "STARTING": "STARTING · Validating the simulation startup.",
+                "PREFLIGHT_CHECKING": f"PREFLIGHT_CHECKING · Market and gas checks, attempt {v('attempt')}.",
+                "READY": "READY · All required readiness checks passed.",
+                "CANCELLED": "Readiness supervision ended.",
+            }.get(state, "Readiness state UNKNOWN.")
+            yield "HEALTH", message
+    elif event == "connection_status":
+        yield "KUCOIN", (f"Market data source changed to {SOURCES.get(record.get('source'), 'UNKNOWN')}. "
+                         f"{diagnosis(record.get('reason'))}.")
+    elif event == "analysis_start":
+        yield worker, f"{check} · Analysis started."
+    elif event == "evaluation":
+        yield from evaluate(record)
+    elif event == "analysis":
+        conclusion = {"admitted": "Simulation admitted", "not_admitted": "No simulation admitted",
+                      "no_opportunity": "NO_OPPORTUNITY"}.get(record.get("conclusion") or record.get("result"),
+                                                              "Result UNKNOWN")
+        yield worker, f"{check} · Analysis completed in {v('duration_ms', ' ms')}. {conclusion}."
+    elif event == "simulated_execution":
+        yield execution(record)
+    elif event == "balance":
+        label = HOLDINGS.get(record.get("holding"), "Virtual balance")
+        balance = f"Total {v('total')}, reserved {v('reserved')}, available {v('available')}"
+        change = f"Previous {v('previous')}, change {v('delta')}. " if record.get("phase") == "commit" else ""
+        yield "BALANCE", f"{label} · {change}{balance}. Reconciliation {v('reconciliation')}."
+    elif event == "lifecycle":
+        yield "SYSTEM", LIFECYCLE.get(record.get("intent"), "Session intent UNKNOWN.")
+    elif event == "session_summary":
+        yield "SYSTEM", (f"Session summary · Duration {v('duration_seconds', ' s')}, {v('cycles')} completed cycles, "
+                         f"{v('admissions')} admissions, {v('filled')} filled, {v('failed')} failed, "
+                         f"{v('incomplete')} incomplete, {v('manual_review')} manual review, {v('active')} pending. "
+                         f"Cycle errors {v('cycle_errors')}, console events dropped or failed {v('console_drops')}.")
+        balances = ", ".join(f"{name} {v(key)}" for key, name in HOLDINGS.items())
+        yield "BALANCE", f"Remaining virtual balances: {balances}."
+        yield "SYSTEM", "Generate or refresh the Excel workbook with the report command."
+    elif event == "storage_status":
+        yield "STORAGE", "Could not read or project the operational status."
+    elif event == "network_sample":
+        yield "HEALTH", f"Network sample · HTTP retries {v('http_retries')}, cache hits {v('cache_hits')}."
+
+
+def format_line(at, level, module, message):
+    return f"[{at:%H:%M:%S}.{at.microsecond // 1000:03d}] {level.upper():<8} [{module}] {message}"
+
+
+def render(record, *, technical=False):
+    at = datetime.fromisoformat(record["at"]).astimezone(UTC)
+    level = record["level"]
+    lines = [format_line(at, level, module, message) for module, message in messages(record, at)]
+    if technical:
+        lines.append(format_line(at, "debug", "LOGGER", json.dumps(record, ensure_ascii=True, sort_keys=True)))
+    return "\n".join(lines)
 
 
 class ConsoleSink:
@@ -68,12 +274,15 @@ class ConsoleSink:
             except Empty:
                 continue
             try:
+                record = json.loads(line)
                 if missing := self.dropped + self.failed - outstanding:
-                    at = datetime.fromisoformat(json.loads(line)["at"])
-                    print(f"[{at:%H:%M:%S}.{at.microsecond // 1000:03d}] WARNING [SYSTEM] "
-                          f"Console sink resumed; {missing} event(s) lost", file=self.stream, flush=True)
+                    at = datetime.fromisoformat(record["at"]).astimezone(UTC)
+                    print(format_line(at, "warning", "LOGGER", f"Console sink resumed. {missing} event(s) lost."),
+                          file=self.stream, flush=True)
                     outstanding += missing
-                print(render(json.loads(line)), file=self.stream, flush=True)
+                rendered = render(record, technical=self.level == LEVELS.index(Level.DEBUG))
+                if rendered:
+                    print(rendered, file=self.stream, flush=True)
             except Exception:
                 self.failed += 1
 

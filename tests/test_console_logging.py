@@ -13,7 +13,7 @@ from threading import Event as ThreadEvent
 import pytest
 
 from arbitrage import cli
-from arbitrage.console import ConsoleSink
+from arbitrage.console import ConsoleSink, render
 from arbitrage.coordinator import NETWORK
 from arbitrage.kucoin import KuCoin
 from arbitrage.models import Holding
@@ -115,17 +115,25 @@ def test_clm_t01_startup(startup, monkeypatch, case):
     assert output.index("STARTING") < output.index("PREFLIGHT_CHECKING")
     if case == "retry":
         assert output.index("WAITING_RETRY") < output.index(" READY") < output.index(" RUNNING")
-        assert "delay_seconds=15" in output and "provider_timeout" in output
+        assert "Retry in 15" in output and "Provider timeout" in output
     elif case == "unavailable_gas":
-        assert "retry_exhausted=True" in output
+        assert "Retry budget exhausted." in output
         assert "STARTUP_BLOCKED" in output and " RUNNING" not in output and "Analysis started" not in output
         assert runtime.status()["analysis_cycles"] == 0
-        assert "gas_price_unavailable" in output
+        assert "RPC gas price unavailable" in output
     else:
-        assert "gas_method=CONFIGURED_GAS_UNITS + LIVE_RPC_GAS_PRICE" in output
-        assert "buy_gas_units=109478 sell_gas_units=109478 gas_limit=300000" in output
-        assert "gas_price_weibars=1630000000000" in output
-        assert "estimated_gas_hbar=0.17844914 maximum_gas_hbar=0.35689828" in output
+        assert "CONFIGURED_GAS_UNITS + LIVE_RPC_GAS_PRICE" in output
+        assert "BUY 109478 gas units, SELL 109478 gas units, validation limit 300000" in output
+        assert "RPC price 1630000000000 weibars per gas" in output
+        assert "Estimated cost 0.17844914 HBAR, maximum budget 0.35689828 HBAR" in output
+        ordered = ("Arbitrage Bot Starting", "Foreground logger initialized", "SIMULATION ONLY",
+                   "Applied simulation configuration", "SQLite initialization and integrity validation",
+                   "Prior virtual executions and outstanding holds", "DEX WHBAR · Total",
+                   "verified chain ID 295", "SaucerSwap WHBAR-USDC token identity",
+                   "WebSocket depth", "REST depth", "DEX BUY gas", "DEX SELL gas",
+                   "All required readiness checks passed", "RUNNING", "CHECK #001")
+        offsets = [output.index(message) for message in ordered]
+        assert offsets == sorted(offsets)
 
 
 def test_clm_t02_ten_cycles_and_shutdown(startup, monkeypatch):
@@ -134,9 +142,9 @@ def test_clm_t02_ten_cycles_and_shutdown(startup, monkeypatch):
     evidence("ten_cycles_graceful_shutdown", stream)
     assert output.count("Applied simulation configuration") == 1
     assert output.count("Analysis started") == output.count("Analysis completed") == 10
-    assert output.count("direction=buy_dex") == output.count("direction=sell_dex") == 10
+    assert output.count("DEX → CEX · Indicative") == output.count("CEX → DEX · Indicative") == 10
     assert output.index(" RUNNING") < output.index("Analysis started")
-    assert "intent=shutdown" in output and "cycles=10 admissions=0" in output
+    assert "Foreground shutdown requested" in output and "10 completed cycles, 0 admissions" in output
     assert runtime.status()["analysis_cycles"] == 10
 
 
@@ -150,16 +158,18 @@ def test_clm_t03_persisted_values_and_unknown(startup, monkeypatch):
         rows = tx._db.execute("SELECT id FROM analysis_cycles ORDER BY rowid").fetchall()
         good = tx.analysis(rows[0][0])
         bad = tx.analysis(rows[1][0])
-    lines = stream.getvalue().splitlines()
+    output = stream.getvalue()
+    good_text, bad_text = output.split("CHECK #002 · Analysis started")
     for item in good.evaluations:
-        line, = (line for line in lines if "Direction evaluated" in line and f"cycle={good.id}" in line
-                 and f"direction={item.direction}" in line)
-        for key, value in (("net_usdt", item.net_profit_usdt), ("stressed_usdt", item.stressed_profit_usdt),
-                           ("gas_capped_usdt", item.gas_cost_usdt), ("indicative_usdt", item.indicative_profit_usdt)):
-            assert f"{key}={value:f}" in line
-    assert all("net_usdt=UNKNOWN" in line for line in lines
-               if "Direction evaluated" in line and f"cycle={bad.id}" in line)
-    assert "reason=gas_invalid" in stream.getvalue() and "NO_OPPORTUNITY" not in stream.getvalue()
+        assert f"Indicative {item.indicative_profit_usdt:f} USDT" in good_text
+        assert f"net {item.net_profit_usdt:f} USDT" in good_text
+        assert f"stressed {item.stressed_profit_usdt:f} USDT" in good_text
+        assert f"/ {item.gas_cost_usdt:f} USDT." in good_text
+    for item in bad.evaluations:
+        assert f"gross quote {item.requested_dex.quote_units / 10**6:.6f} USDC" in bad_text
+        assert f"fee-inclusive quote {item.requested_cex.quote_units / 10**6:.6f} USDT" in bad_text
+    assert bad_text.count("net UNKNOWN") == 2
+    assert "Gas data invalid or stale" in bad_text and "NO_OPPORTUNITY" not in bad_text
 
 
 @pytest.mark.parametrize("fault", ["duplicate_snapshot", "stale_or_invalid_clock", "insufficient_depth", "ws_rest"])
@@ -193,11 +203,14 @@ def test_clm_t04_source_and_cycle_faults(startup, monkeypatch, fault):
     output = stream.getvalue()
     if fault == "ws_rest":
         evidence("websocket_to_rest", stream)
-        transitions = [line for line in output.splitlines() if "KuCoin source changed" in line]
-        assert any("source=websocket" in line for line in transitions)
-        assert any("source=rest" in line for line in transitions[1:])
+        transitions = [line for line in output.splitlines() if "Market data source changed" in line]
+        assert any("changed to WebSocket" in line for line in transitions)
+        assert any("changed to REST" in line for line in transitions[1:])
     else:
-        assert f"reason={fault}" in output
+        reason = {"stale_or_invalid_clock": "Stale market data or invalid clock",
+                  "duplicate_snapshot": "Duplicate snapshot",
+                  "insufficient_depth": "Insufficient depth"}[fault]
+        assert reason in output
 
 
 @pytest.mark.parametrize("case", ["success", "dex_failure", "cex_partial", "unknown"])
@@ -213,23 +226,25 @@ def test_clm_t05_committed_execution_and_balances(startup, monkeypatch, case):
     runtime, stream, _ = capture(startup, monkeypatch, scenario=scenarios[case], blocked=case == "unknown")
     output = stream.getvalue()
     evidence(case, stream)
-    assert "phase=admitted" in output and "admission=admitted" in output
+    assert "Admitted SIMULATED execution" in output and "Admission admitted" in output
     expected = {"success": "filled", "dex_failure": "failed", "cex_partial": "incomplete", "unknown": "manual_review"}
     with runtime.storage.transaction() as tx:
         trade_id, status = tx._db.execute("SELECT id, status FROM simulated_trades").fetchone()
         assert status == expected[case]
         assert all(entry.id.startswith(f"sim:{trade_id}:") for entry in tx.ledger())
-    assert f"result={expected[case]}" in output
-    assert "phase=commit" in output and "reconciliation=PASS" in output
-    dex_index = output.index("venue=dex")
+    outcome = expected[case].replace("_", " ").upper()
+    assert f"finished · {outcome}" in output
+    assert "Previous " in output and "Reconciliation PASS" in output
+    assert "Committed stablecoin changes" in output
+    dex_index = output.index("SIMULATED DEX execution")
     if case == "dex_failure":
-        assert "venue=cex" not in output and "attempt=3" in output
+        assert "SIMULATED KuCoin execution" not in output and "Retry attempt 3" in output
     else:
-        assert dex_index < output.index("venue=cex")
+        assert dex_index < output.index("SIMULATED KuCoin execution")
     if case == "cex_partial":
-        assert "filled_hbar=500.00000000" in output
+        assert "Filled 500.00000000 HBAR" in output
     if case == "unknown":
-        assert "result=manual_review" in output and "cex.HBAR=1000.00000000" in output
+        assert "Fee UNKNOWN" in output and "Retained holds: KuCoin HBAR 1000.00000000" in output
 
 
 def test_clm_t06_crash_after_commit_no_duplicate(startup, monkeypatch):
@@ -273,8 +288,8 @@ def test_clm_t06_crash_after_commit_no_duplicate(startup, monkeypatch):
     runtime, stream, _ = capture(startup, monkeypatch, action="recover", limit=2)
     evidence("crash_recovery", stream)
     output = stream.getvalue()
-    assert any(f"execution={pending['id']}" in line and "phase=recovery" in line for line in output.splitlines())
-    assert "venue=dex" not in output and "venue=cex" in output
+    assert f"Recovering SIMULATED execution {pending['id']}" in output
+    assert "SIMULATED DEX execution" not in output and "SIMULATED KuCoin execution" in output
     with runtime.storage.transaction() as tx:
         assert tx.simulation_status(pending["id"]) == "filled"
         assert len([entry for entry in tx.ledger() if entry.holding == Holding.DEX_HBAR]) == 1
@@ -304,7 +319,7 @@ def test_clm_t07_slow_sink_does_not_affect_finances(startup, monkeypatch):
         stream.release.set()
         sink._thread.join(2)
     evidence("slow_sink", stream)
-    assert "Console sink resumed;" in stream.getvalue()
+    assert "Console sink resumed." in stream.getvalue()
 
 
 def test_clm_t07_failed_sink_recovers():
@@ -325,7 +340,7 @@ def test_clm_t07_failed_sink_recovers():
     log.emit(Event.STARTUP)
     sink.close()
     assert sink.failed == 1
-    assert "Console sink resumed; 1 event(s) lost" in stream.getvalue()
+    assert "Console sink resumed. 1 event(s) lost" in stream.getvalue()
     assert "private injected exception" not in stream.getvalue()
     evidence("failed_sink_recovered", stream)
 
@@ -358,23 +373,43 @@ def test_clm_t08_secret_injection_and_cli_compatibility(tmp_path, capsys):
 def test_clm_t09_level_utc_correlation_and_summary(startup, monkeypatch, level):
     runtime, stream, _ = capture(startup, monkeypatch, level=level)
     lines = stream.getvalue().splitlines()
-    assert all(re.match(r"^\[\d{2}:\d{2}:\d{2}\.\d{3}\] (INFO|DEBUG|WARNING|ERROR|CRITICAL) \[[A-Z]+\] ", line)
-               for line in lines)
+    assert all(re.match(r"^\[\d{2}:\d{2}:\d{2}\.\d{3}\] (INFO|DEBUG|WARNING|ERROR|CRITICAL) +\[[A-Z0-9-]+\] ", line)
+               and line[24] == "[" for line in lines)
     assert (" DEBUG " in stream.getvalue()) == (level == Level.DEBUG)
     assert "(2026-11-26 UTC)" in lines[0]
-    session = runtime.status()["session"]["id"]
-    start = next(line for line in lines if "Analysis started" in line)
-    cycle = re.search(r"cycle=([0-9a-f]{32})", start)[1]
-    assert all(f"session={session}" in line for line in lines)
-    assert sum(f"cycle={cycle}" in line and "Direction evaluated" in line for line in lines) == 2
-    assert "cycles=1 admissions=0" in lines[-1]
+    assert "1 completed cycles, 0 admissions" in stream.getvalue()
+    if level == Level.DEBUG:
+        structured = [json.loads(line.split("[LOGGER] ", 1)[1])
+                      for line in lines if "[LOGGER] {" in line]
+        session = runtime.status()["session"]["id"]
+        start = next(event for event in structured if event["event"] == "analysis_start")
+        evaluations = [event for event in structured if event["event"] == "evaluation"]
+        assert len(evaluations) == 2
+        assert all(event["cycle"] == start["cycle"] and event["session"] == session for event in evaluations)
+    else:
+        assert all("cycle=" not in line and "session=" not in line for line in lines)
+
+
+@pytest.mark.parametrize("level", list(Level))
+def test_console_alignment_and_utc(level):
+    [line] = render({"at": "2026-11-26T01:02:03.456789+01:00", "level": level,
+                     "event": "storage_status"}).splitlines()
+    assert line == f"[00:02:03.456] {level.upper():<8} [STORAGE] Could not read or project the operational status."
+
+
+def test_unknown_dex_charge_and_retained_hold():
+    line = render({"at": POOL_TIME.isoformat(), "level": "warning", "event": "simulated_execution",
+                   "phase": "result", "venue": "dex", "attempt": 1, "result": "unknown",
+                   "dex.HBAR": "0.35689828"})
+    assert "Gas charged UNKNOWN" in line
+    assert "Retained holds: DEX HBAR gas 0.35689828" in line
 
 
 def test_clm_t10_offline_no_unexpected_network(startup, monkeypatch):
     runtime, stream, _ = capture(startup, monkeypatch)
     replay = startup[0]
     assert replay.gas_price_reads == 2
-    assert "real trading disabled" in stream.getvalue()
+    assert "Real trading, wallet signing and order submission are disabled" in stream.getvalue()
     with runtime.storage.transaction() as tx:
         assert tx._db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert tx._db.execute("PRAGMA foreign_key_check").fetchall() == []

@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from .coordinator import MIN_INTERVAL, NETWORK
 from .kucoin import SYMBOL
-from .models import GAS_SOURCE, Balance, EvaluationStatus, Holding, Venue
+from .models import GAS_SOURCE, Balance, EvaluationStatus, Holding, Reason, Venue
 from .operational_log import Event, Level
 from .saucerswap import CHAIN_ID
 from .simulation import Effect, Event as JournalEvent, Request
@@ -50,8 +50,9 @@ class Monitor:
     def opening(self):
         with self.runtime.storage.observe() as tx:
             balances = tuple(tx.balance(holding) for holding in Holding)
+            reconciled = self.runtime._reconciled(tx)
         for balance in balances:
-            self.balance(balance, None, "opening", "PASS")
+            self.balance(balance, None, "opening", "PASS" if reconciled else "FAIL")
 
     def balance(self, balance, delta, phase, reconciliation, execution=None):
         decimals = balance.holding.asset.decimals
@@ -78,7 +79,7 @@ class Monitor:
             dex, cex = item.requested_dex, item.requested_cex
             basis = item.configured_gas
             self.emit(Event.EVALUATION, cycle=cycle.id, number=self.number, direction=item.direction,
-                      status=item.status, reason=item.reason, source=source,
+                      status=item.status, reason=item.reason, gas_error=item.gas_estimation_error, source=source,
                       trade_hbar=units((dex or cex).base_units, 8) if (dex or cex) else None,
                       dex_side=dex.side.value if dex else None, dex_usdc=units(dex.quote_units, 6) if dex else None,
                       cex_side=cex.side.value if cex else None, cex_usdt=units(cex.quote_units, 6) if cex else None,
@@ -91,9 +92,17 @@ class Monitor:
                       admission="admitted" if item.direction == admitted else
                       "declined" if item.status == EvaluationStatus.ELIGIBLE else "not_eligible",
                       guard=miss[0] if miss and item.status == EvaluationStatus.ELIGIBLE else None)
-        self.emit(Event.ANALYSIS, cycle=cycle.id, number=self.number,
+        no_opportunity = bool(cycle.evaluations) and all(
+            item.net_profit_usdt is not None
+            and item.reason in (Reason.PROFIT_THRESHOLD, Reason.MAXIMUM_LOSS)
+            for item in cycle.evaluations
+        )
+        uncertain = any(item.status == EvaluationStatus.INSUFFICIENT_DATA or item.gas_estimation_error
+                        for item in cycle.evaluations)
+        self.emit(Event.ANALYSIS, Level.WARNING if uncertain else Level.INFO, cycle=cycle.id, number=self.number,
                   duration_ms=max(0, round((self.runtime.timer() - self.started) * 1000)),
-                  result="admitted" if admitted else "not_admitted", source=source)
+                  result="admitted" if admitted else "not_admitted", source=source,
+                  conclusion="no_opportunity" if no_opportunity else None)
         if request:
             self.execution = cycle.id
             self.cursor = 1  # the acceptance is represented by this event
@@ -128,6 +137,10 @@ class Monitor:
             events = tuple(JournalEvent.model_validate_json(entry) for entry in data)
             balances = {entry.holding: tx.balance(entry.holding) for event in events for entry in event.ledger}
             reconciled = self.runtime._reconciled(tx) if balances else False
+            stablecoin_changes = defaultdict(int)
+            if status != "active":
+                for entry in tx.simulation_ledger(execution):
+                    stablecoin_changes[entry.holding] += entry.delta_units
         if not events:
             return
         self.cursor += len(events)
@@ -140,7 +153,8 @@ class Monitor:
             event_holds = {hold.holding: hold.units for hold in event.remaining or ()}
             fill = event.fill
             known = event.outcome is not None and event.outcome != Effect.UNKNOWN
-            self.emit(Event.SIMULATED_EXECUTION, cycle=execution, execution=execution,
+            level = Level.INFO if event.outcome in (None, Effect.FILL) else Level.WARNING
+            self.emit(Event.SIMULATED_EXECUTION, level, cycle=execution, execution=execution,
                       phase="attempt" if event.due_at else "result" if event.outcome else "review",
                       recorded_at=event.at, venue=event.venue, attempt=event.attempt or None, result=event.outcome.value if event.outcome else None,
                       filled_hbar=units(fill.base_units, 8) if fill else None,
@@ -158,7 +172,11 @@ class Monitor:
                                   + event_holds.get(holding, 0))
                 self.balance(balance, entry.delta_units, "commit", "PASS" if reconciled else "FAIL", execution)
         if status != "active":
-            self.emit(Event.SIMULATED_EXECUTION, cycle=execution, execution=execution, phase="terminal", result=status,
+            level = Level.INFO if status == "filled" else Level.ERROR
+            self.emit(Event.SIMULATED_EXECUTION, level, cycle=execution, execution=execution,
+                      phase="terminal", result=status,
+                      delta_usdc=units(stablecoin_changes[Holding.DEX_USDC], 6),
+                      delta_usdt=units(stablecoin_changes[Holding.CEX_USDT], 6),
                       **self.holds(events[-1].remaining))
 
     def count(self, tx):
@@ -177,14 +195,22 @@ class Monitor:
                 """SELECT s.status, count(*) FROM simulated_trades s JOIN analysis_cycles a ON a.id=s.id
                    WHERE json_extract(a.payload, '$.session_id')=? GROUP BY s.status""", (self.session,),
             ))
+            balances = {holding: units(tx.balance(holding).total_units, holding.asset.decimals)
+                        for holding in Holding}
+        started = datetime.fromisoformat(row["start"])
+        ended = datetime.fromisoformat(row["ended"]) if row["ended"] else self.runtime.now()
+        if row["state"] == "expired":
+            ended = min(ended, datetime.fromisoformat(row["deadline"]))
+        duration = Decimal(str(max(0, (ended - started).total_seconds())))
         intent = "shutdown" if shutdown else row["state"]
         if self.runtime.readiness and self.runtime.readiness["state"] == "STARTUP_BLOCKED":
             intent = "startup_blocked"
         elif intent == "running":
             intent = "interrupted"
-        self.emit(Event.LIFECYCLE, intent=intent)
+        self.emit(Event.LIFECYCLE, Level.CRITICAL if intent == "emergency" else Level.INFO, intent=intent)
         sink = self.runtime.log.sink
-        self.emit(Event.SESSION_SUMMARY, cycles=cycles, admissions=sum(outcomes.values()), cycle_errors=errors,
+        self.emit(Event.SESSION_SUMMARY, duration_seconds=duration, cycles=cycles,
+                  admissions=sum(outcomes.values()), cycle_errors=errors, **balances,
                   console_drops=sink.dropped + sink.failed if sink else 0,
                   **{status: outcomes.get(status, 0) for status in
                      ("filled", "failed", "incomplete", "manual_review", "active")})

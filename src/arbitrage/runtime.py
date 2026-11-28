@@ -351,7 +351,7 @@ class Runtime:
         while not shutdown.is_set() and self.tick(worker_id):
             await self.sleep(POLL_SECONDS)
 
-    def _readiness_state(self, public, engine, worker, state, *, reason=None, next_at=None, exhausted=False):
+    def _readiness_state(self, public, engine, worker, state, *, reason=None, next_at=None, delay=None, exhausted=False):
         self.readiness.update(state=state, reason=reason, observed_at=self.now().isoformat(),
                               next_attempt_at=next_at.isoformat() if next_at else None)
         level = (Level.ERROR if state == ReadinessState.STARTUP_BLOCKED else
@@ -359,7 +359,7 @@ class Runtime:
         self.log.emit(Event.READINESS_STATE, level, worker=worker, session=self.session_id,
                       state=state, diagnostic=reason, attempt=self.readiness["attempt"],
                       next_attempt_at=next_at,
-                      delay_seconds=Decimal(str(max(0, (next_at - self.now()).total_seconds()))) if next_at else None,
+                      delay_seconds=Decimal(str(delay)) if delay is not None else None,
                       retry_exhausted=exhausted)
         self._health(public, engine)
 
@@ -547,7 +547,6 @@ class Runtime:
                     None if consistent else Diagnostic.STORAGE_INCONSISTENT)
         if not consistent:
             self._block(public, engine, worker, Diagnostic.STORAGE_INCONSISTENT)
-        self._observe("opening")
         await self._recover(engine)
         if self._shutdown.is_set() or not self.tick(worker):
             return False
@@ -558,6 +557,7 @@ class Runtime:
             self._check(worker, Check.RECOVERY, Outcome.FAIL, Diagnostic.RECOVERY_UNRESOLVED)
             self._block(public, engine, worker, Diagnostic.RECOVERY_UNRESOLVED)
         self._check(worker, Check.RECOVERY, Outcome.PASS)
+        self._observe("opening")
         for retry in range(len(STARTUP_RETRY_DELAYS) + 1):
             if not await self._network_slot(worker, reserve=True):
                 return False
@@ -585,7 +585,7 @@ class Runtime:
                         (earliest - now).total_seconds())
             next_at = now + timedelta(seconds=delay) if delay < remaining else None
             self._readiness_state(public, engine, worker, ReadinessState.WAITING_RETRY, reason=reason,
-                                  next_at=next_at)
+                                  next_at=next_at, delay=min(delay, remaining))
             await self.sleep(min(delay, remaining))
         return False
 

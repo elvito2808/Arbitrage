@@ -54,7 +54,7 @@ def parser():
     resume = commands.add_parser("resume", help="resume the paused session in the foreground")
     recover = commands.add_parser("recover", help="reattach in the foreground after untimely process exit")
     for foreground_command in (start, resume, recover):
-        foreground_command.add_argument("--log-level", choices=("INFO", "DEBUG"), default="INFO")
+        foreground_command.add_argument("--log-level", choices=tuple(level.value.upper() for level in Level), default="INFO")
     commands.add_parser("pause", help="pause the current session")
     commands.add_parser("stop", help="stop the current session")
     commands.add_parser("emergency-stop", help="latch a persistent emergency stop")

@@ -1,0 +1,45 @@
+OFFLINE SYNTHETIC OUTPUT — console formatting example.
+[01:30:15.000] INFO     [SYSTEM] Arbitrage Bot Starting (2026-11-26 UTC).
+[01:30:15.000] INFO     [LOGGER] Foreground logger initialized on stderr.
+[01:30:15.000] INFO     [SECURITY] SIMULATION ONLY. Real trading, wallet signing and order submission are disabled.
+[01:30:15.000] INFO     [CONFIG] Applied simulation configuration · WHBAR-USDC on Hedera and HBAR-USDT on KuCoin.
+[01:30:15.000] INFO     [CONFIG] Workers 3, active limit 1. Trade quantity 1000 HBAR. Minimum profit 0.1 USDT, maximum loss 0.3 USDT.
+[01:30:15.000] INFO     [CONFIG] Slippage fraction 0.005, KuCoin fee fraction 0.001, gas multiplier 2×. Snapshot TTL 10 s, cycle interval 15 s. Session deadline 2026-11-27T01:30:15+00:00. USDC/USDT parity enabled.
+[01:30:15.000] INFO     [GAS] CONFIGURED_GAS_UNITS + LIVE_RPC_GAS_PRICE. BUY 109478 gas units, SELL 109478 gas units, validation limit 300000.
+[01:30:15.000] INFO     [HEALTH] STARTING · Validating the simulation startup.
+[01:30:15.000] INFO     [CONFIG] PASS · Simulation configuration validation.
+[01:30:15.000] INFO     [STORAGE] PASS · SQLite initialization and integrity validation.
+[01:30:15.000] INFO     [RECOVERY] PASS · Prior virtual executions and outstanding holds.
+[01:30:15.000] INFO     [BALANCE] DEX WHBAR · Total 50000.00000000, reserved 0.00000000, available 50000.00000000. Reconciliation PASS.
+[01:30:15.000] INFO     [BALANCE] DEX USDC · Total 3000.000000, reserved 0.000000, available 3000.000000. Reconciliation PASS.
+[01:30:15.000] INFO     [BALANCE] DEX HBAR gas · Total 1000.00000000, reserved 0.00000000, available 1000.00000000. Reconciliation PASS.
+[01:30:15.000] INFO     [BALANCE] KuCoin HBAR · Total 50000.00000000, reserved 0.00000000, available 50000.00000000. Reconciliation PASS.
+[01:30:15.000] INFO     [BALANCE] KuCoin USDT · Total 3000.000000, reserved 0.000000, available 3000.000000. Reconciliation PASS.
+[01:30:15.000] INFO     [HEALTH] PREFLIGHT_CHECKING · Market and gas checks, attempt 1.
+[01:30:15.000] INFO     [KUCOIN] Market data source changed to REST. WebSocket unavailable.
+[01:30:15.000] INFO     [HEDERA] PASS · Hedera RPC verified chain ID 295. Mirror corroborated the block.
+[01:30:15.000] INFO     [DEX] PASS · SaucerSwap WHBAR-USDC token identity and decimals verified. Pool 0xdb34c1ef944883f0e5a2fc18b6c1978b088bd31d, router 0.0.3045981.
+[01:30:15.000] INFO     [KUCOIN] PASS · Market identity and depth via REST.
+[01:30:15.000] WARNING  [KUCOIN] DEGRADED · WebSocket depth.
+[01:30:15.000] INFO     [KUCOIN] PASS · REST depth.
+[01:30:15.000] INFO     [HEALTH] PASS · Market snapshot freshness and consistency.
+[01:30:15.000] INFO     [GAS] PASS · DEX BUY gas. RPC price 1630000000000 weibars per gas. Estimated cost 0.17844914 HBAR, maximum budget 0.35689828 HBAR.
+[01:30:15.000] INFO     [GAS] PASS · DEX SELL gas. RPC price 1630000000000 weibars per gas. Estimated cost 0.17844914 HBAR, maximum budget 0.35689828 HBAR.
+[01:30:15.000] INFO     [BALANCE] PASS · Virtual funding for both directions.
+[01:30:15.000] INFO     [HEALTH] READY · All required readiness checks passed.
+[01:30:30.000] INFO     [WORKER-01] RUNNING · Readiness verified.
+[01:30:30.000] INFO     [WORKER-01] CHECK #001 · Analysis started.
+[01:30:30.000] INFO     [DEX] BUY 1000.00000000 WHBAR · gross quote 52.761762 USDC.
+[01:30:30.000] INFO     [KUCOIN] SELL 1000.00000000 HBAR · fee-inclusive quote 52.647300 USDT via REST.
+[01:30:30.000] INFO     [GAS] DEX BUY estimated cost 0.17844914 HBAR / 0.009423 USDT. Maximum budget 0.35689828 HBAR / 0.018845 USDT.
+[01:30:30.000] INFO     [ARB] DEX → CEX · Indicative -0.114462 USDT, net -0.133307 USDT, stressed -0.660353 USDT. REJECTED · Stressed loss exceeds the configured limit. Admission not eligible.
+[01:30:30.000] INFO     [DEX] SELL 1000.00000000 WHBAR · gross quote 52.418017 USDC.
+[01:30:30.000] INFO     [KUCOIN] BUY 1000.00000000 HBAR · fee-inclusive quote 52.852800 USDT via REST.
+[01:30:30.000] INFO     [GAS] DEX SELL estimated cost 0.17844914 HBAR / 0.009423 USDT. Maximum budget 0.35689828 HBAR / 0.018845 USDT.
+[01:30:30.000] INFO     [ARB] CEX → DEX · Indicative -0.434783 USDT, net -0.453628 USDT, stressed -0.979983 USDT. REJECTED · Stressed loss exceeds the configured limit. Admission not eligible.
+[01:30:30.000] INFO     [WORKER-01] CHECK #001 · Analysis completed in 0 ms. NO_OPPORTUNITY.
+[01:30:30.000] INFO     [HEALTH] Readiness supervision ended.
+[01:30:30.000] INFO     [SYSTEM] Foreground shutdown requested.
+[01:30:30.000] INFO     [SYSTEM] Session summary · Duration 15.0 s, 1 completed cycles, 0 admissions, 0 filled, 0 failed, 0 incomplete, 0 manual review, 0 pending. Cycle errors 0, console events dropped or failed 0.
+[01:30:30.000] INFO     [BALANCE] Remaining virtual balances: DEX WHBAR 50000.00000000, DEX USDC 3000.000000, DEX HBAR gas 1000.00000000, KuCoin HBAR 50000.00000000, KuCoin USDT 3000.000000.
+[01:30:30.000] INFO     [SYSTEM] Generate or refresh the Excel workbook with the report command.
