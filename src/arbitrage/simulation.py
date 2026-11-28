@@ -12,7 +12,7 @@ from pydantic import Field, ValidationError
 
 from .config import Simulation
 from .coordinator import (
-    NETWORK, WEIBARS_PER_TINYBAR, InvalidCycle, Market, OpportunityCoordinator, ceil,
+    NETWORK, InvalidCycle, Market, OpportunityCoordinator, ceil,
 )
 from .kucoin import Level, depth_value
 from .market_data import TRADE_UNITS, PublicConnections
@@ -20,7 +20,7 @@ from .models import (
     MAX_UNITS, AnalysisCycle, Evaluation, EvaluationStatus, Holding, LedgerEntry,
     MarketQuote, PositiveUnits, Reason, Record, Reservation, Side, Timestamp, Units, Venue, WorkerState,
 )
-from .saucerswap import GasEstimate, RouteGasEvidence
+from .saucerswap import GasEstimate, RouteGasEvidence, gas_cost_tinybars
 from .storage import Storage, Transaction
 
 MAX_ATTEMPTS = 3
@@ -128,6 +128,7 @@ class SimulationEngine(OpportunityCoordinator):
     _scenario = Scenario()
     _sleep: Callable[[float], Awaitable[None]] = staticmethod(asyncio.sleep)
     _public_simulation = False
+    on_journal_commit: Callable[[str], None] | None = None
     recovery_gate: Callable[[Transaction], bool] | None = None
 
     @classmethod
@@ -136,7 +137,12 @@ class SimulationEngine(OpportunityCoordinator):
     ) -> "SimulationEngine":
         engine = super().from_public(storage, settings, public)
         engine._public_simulation = True
+        engine.gate = cls._require_readiness
         return engine
+
+    @staticmethod
+    def _require_readiness(tx, worker_id, now) -> Reason:
+        return Reason.READINESS_BLOCKED
 
     @property
     def _journal_scope(self) -> str | None:
@@ -171,7 +177,8 @@ class SimulationEngine(OpportunityCoordinator):
         # in this transaction. There is no caller-supplied Evaluation entry point.
         now = self._now()
         worker = tx.worker(cycle.worker_id)
-        if (not tx.owns_analysis(NETWORK, cycle.id, now)
+        if ((self.gate is not None and self.gate(tx, cycle.worker_id, now) is not None)
+                or not tx.owns_analysis(NETWORK, cycle.id, now)
                 or worker is None or worker.state != WorkerState.RUNNING
                 or tx.analysis(cycle.id) != cycle
                 or not tx.owns_snapshots(NETWORK, cycle.id, self._snapshot_ids(market))):
@@ -219,9 +226,7 @@ class SimulationEngine(OpportunityCoordinator):
             gas=GasBasis(
                 observed_at=gas.observed_at, route_gas=gas.execution_gas,
                 price_weibars=gas.price_range_weibars,
-                debit_tinybars=ceil(Fraction(
-                    gas.execution_gas * gas.price_range_weibars[0], WEIBARS_PER_TINYBAR,
-                )),
+                debit_tinybars=gas_cost_tinybars(gas.execution_gas, gas.price_range_weibars[0]),
                 evidence=gas.route_evidence if self._public_simulation else None,
             ),
             funding=funding, scenario=self._scenario,
@@ -351,13 +356,26 @@ class SimulationEngine(OpportunityCoordinator):
                 evidence = request.gas.evidence
                 rpc = evidence.rpc if evidence is not None else None
                 dex = request.evaluation.requested_dex
-                if (rpc is None or dex is None or evidence.side != dex.side
-                        or evidence.snapshot_id != dex.snapshot_id
-                        or evidence.execution_gas != request.gas.route_gas
-                        or evidence.id != request.evaluation.gas_evidence_id
-                        or rpc.side != evidence.side or rpc.estimated_gas != request.gas.route_gas
-                        or rpc.estimated_at != request.gas.observed_at
-                        or rpc.gas_price_weibars != request.gas.price_weibars[0]):
+                configured = evidence.configured if evidence is not None else None
+                gas = request.gas
+                if configured is not None:
+                    valid_basis = (
+                        rpc is None and request.evaluation.configured_gas == configured
+                        and configured.configured_gas_units == gas.route_gas
+                        and configured.price_observed_at == gas.observed_at
+                        and gas.price_weibars == (configured.gas_price_weibars, 2 * configured.gas_price_weibars)
+                        and gas.debit_tinybars == gas_cost_tinybars(gas.route_gas, configured.gas_price_weibars)
+                        and request.evaluation.gas_budget_tinybars is not None
+                        and gas.debit_tinybars <= request.evaluation.gas_budget_tinybars
+                    )
+                else:
+                    valid_basis = (
+                        rpc is not None and rpc.side == evidence.side and rpc.estimated_gas == gas.route_gas
+                        and rpc.estimated_at == gas.observed_at and rpc.gas_price_weibars == gas.price_weibars[0]
+                    )
+                if (not valid_basis or dex is None or evidence.side != dex.side
+                        or evidence.snapshot_id != dex.snapshot_id or evidence.execution_gas != gas.route_gas
+                        or evidence.id != request.evaluation.gas_evidence_id):
                     self._append(tx, trade_id, Event(
                         id=f"sim:{trade_id}:review", at=now,
                         remaining=self._remaining(tx, request), note="gas provenance mismatch",
@@ -431,7 +449,9 @@ class SimulationEngine(OpportunityCoordinator):
             except (ValueError, sqlite3.IntegrityError):
                 if self._journal_scope is None:
                     return "manual_review"
-                return self._settlement_review(row["id"])
+                status, due = self._settlement_review(row["id"]), None
+            if self.on_journal_commit:
+                self.on_journal_commit(row["id"])
             if due is not None:
                 await self._sleep(max(0, (due - self._now()).total_seconds()))
         return status

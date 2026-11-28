@@ -1,10 +1,9 @@
-# NOT DEPLOYED. Separate owner approval required.
-# Requires an existing dedicated unprivileged arbitrage account and a private initialized state directory.
+# Start and resume must be authorized through arbitrage-ctl.
 [Unit]
-Description=Arbitrage public analysis (reattach to existing running session)
+Description=Arbitrage simulation (recover authorized session)
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=120
+StartLimitIntervalSec=900
 StartLimitBurst=3
 
 [Service]
@@ -15,10 +14,12 @@ StateDirectory=arbitrage
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/arbitrage
 UMask=0077
-ExecStart=/opt/arbitrage/venv/bin/arbitrage --data-dir /var/lib/arbitrage recover
-Restart=on-failure
+EnvironmentFile=-/opt/arbitrage/service.env
+Environment=PYTHONUTF8=1
+ExecStart=/opt/arbitrage/current/venv/bin/python /opt/arbitrage/current/deploy/managed.py /var/lib/arbitrage recover
+Restart=on-abnormal
 RestartSec=10s
-TimeoutStopSec=20s
+TimeoutStopSec=30s
 KillSignal=SIGTERM
 NoNewPrivileges=true
 ProtectSystem=strict

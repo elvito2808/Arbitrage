@@ -18,10 +18,10 @@ from test_simulation import CONFIG, admit, state
 
 
 class RecordedMarket(Hedera, Exchange):
-    def __init__(self, estimate):
+    def __init__(self, price):
         super().__init__()
-        self.estimate = estimate
-        self.estimates = []
+        self.price = price
+        self.price_reads = 0
         self.depth = {
             "sequence": "61",
             "time": int(POOL_TIME.timestamp() * 1000),
@@ -30,36 +30,41 @@ class RecordedMarket(Hedera, Exchange):
         }
 
     async def rpc(self, method, *params):
-        if method == "eth_estimateGas":
-            self.estimates.append(params[0])
-            if self.estimate is None:
-                raise Unavailable("recorded estimate reverted")
-            return hex(self.estimate)
+        if method == "eth_gasPrice":
+            assert not params
+            self.price_reads += 1
+            if self.price is None:
+                raise Unavailable("recorded price unavailable")
+            return hex(self.price)
         return await super().rpc(method, *params)
 
 
-@pytest.mark.parametrize("estimate", [150_000, None])
-def test_public_replay_reservation_restart_and_reconciliation(tmp_path, monkeypatch, estimate):
+@pytest.mark.parametrize("price", [1_540_000_000_000, None])
+def test_public_replay_reservation_restart_and_reconciliation(tmp_path, monkeypatch, price):
     def reject_socket(*args, **kwargs):
         pytest.fail("unexpected socket connection")
 
     monkeypatch.setattr(socket.socket, "connect", reject_socket)
     monkeypatch.setattr(socket.socket, "connect_ex", reject_socket)
     config = load_config(CONFIG)
-    settings = config.simulation.model_copy(update={
-        "hedera_estimate_sender": "0x0000000000000000000000000000000000001234",
-    })
+    settings = config.simulation
     store = Storage(tmp_path / "simulation.db")
     store.initialize()
     with store.transaction() as tx:
         tx.seed_balances(config.balances.as_balances())
-    market = RecordedMarket(estimate)
+    market = RecordedMarket(price)
     opening = state(store)
-    cycle = admit(SimulationEngine.from_public(store, settings, market))
+    engine = SimulationEngine.from_public(store, settings, market)
+    unready = admit(engine)
+    assert all(item.reason == Reason.READINESS_BLOCKED for item in unready.evaluations)
+    assert market.price_reads == 0 and state(store) == opening
+    with store.transaction() as tx:
+        assert tx.analysis(unready.id) is None
+    engine.gate = lambda *_: None
+    cycle = admit(engine)
 
-    assert len(market.estimates) == 2
-    assert len({request["data"][:10] for request in market.estimates}) == 2
-    if estimate is None:
+    assert market.price_reads == 1
+    if price is None:
         assert all(item.reason in (Reason.GAS_UNKNOWN, Reason.GAS_INVALID)
                    for item in cycle.evaluations)
         assert state(store) == opening
@@ -67,6 +72,11 @@ def test_public_replay_reservation_restart_and_reconciliation(tmp_path, monkeypa
 
     eligible, = (item for item in cycle.evaluations if item.status == EvaluationStatus.ELIGIBLE)
     assert eligible.gas_evidence_id
+    for item in cycle.evaluations:
+        assert str(item.estimated_gas_hbar) == "0.16859612"
+        assert str(item.estimated_gas_usdc) == "0.009290"
+        assert str(item.gas_cost_usdt) == "0.018580"
+        assert item.gas_budget_tinybars == 33_719_224
     assert state(store)[2:] == (1, 3)
     assert state(store)[1] == opening[1]
 
@@ -92,11 +102,8 @@ def test_public_replay_reservation_restart_and_reconciliation(tmp_path, monkeypa
 
 @pytest.mark.parametrize("emergency", [False, True])
 def test_expired_session_drains_prior_admission_only(tmp_path, monkeypatch, emergency):
-    market = RecordedMarket(150_000)
+    market = RecordedMarket(1_540_000_000_000)
     config = load_config(CONFIG)
-    config = config.model_copy(update={"simulation": config.simulation.model_copy(update={
-        "hedera_estimate_sender": "0x0000000000000000000000000000000000001234",
-    })})
     clock = [market.now, 0.0]
     runtime = Runtime(tmp_path, clock=lambda: clock[0], timer=lambda: clock[1])
     runtime.initialize(config)
@@ -110,6 +117,7 @@ def test_expired_session_drains_prior_admission_only(tmp_path, monkeypatch, emer
     engine._sleep = advance
     with runtime.owner():
         runtime.activate("start", "worker-1", config)
+        engine.gate = lambda *_: None
         cycle = asyncio.run(engine.worker("worker-1").analyze())
         assert any(item.status == EvaluationStatus.ELIGIBLE for item in cycle.evaluations)
         assert state(runtime.storage)[2:] == (1, 3)

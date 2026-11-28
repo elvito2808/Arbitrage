@@ -37,11 +37,11 @@ work. Pricing prefers valid public KuCoin WebSocket depth and automatically
 uses REST during outages. Status and the workbook expose the selected source,
 quote freshness, and execution status.
 
-`simulation.hedera_estimate_sender` is optional and accepts a public EVM
-address. Leave it unset for analysis without gas-verified admission. A sender
-whose existing public state cannot support read-only estimation leaves the
-affected direction ineligible. The simulator uses no private key and all
-execution state is recorded in the virtual SQLite portfolio.
+Gas readiness uses the configured BUY and SELL gas units and the current
+Hedera RPC gas price. The configured gas limit validates both unit counts.
+The legacy `simulation.hedera_estimate_sender` field is optional and unused.
+A valid price and fresh market data are required for admission. The simulator
+requires no wallet state and records execution in the virtual SQLite portfolio.
 
 Use `status` for durable intent, observations, counters, freshness at the
 last cycle, and a capped operational event history. Operational events use a

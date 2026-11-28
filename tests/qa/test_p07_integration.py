@@ -1,7 +1,6 @@
 """Production adapters and CLI tested with recorded shapes and a fake HTTP session."""
 
 import asyncio
-import json
 import socket
 import sqlite3
 from contextlib import asynccontextmanager
@@ -15,6 +14,7 @@ from arbitrage import cli
 from arbitrage.config import load_config
 from arbitrage.kucoin import KuCoin
 from arbitrage.market_data import MarketDataError, PublicConnections
+from arbitrage.readiness import StartupBlocked
 from arbitrage.runtime import Runtime
 from test_market_data import POOL_TIME, Exchange, Hedera
 
@@ -52,9 +52,10 @@ class ReplaySession:
         self.requests.append((method, url))
         if url == "https://mainnet.hashio.io/api":
             assert method == "POST"
+            body = {"jsonrpc": "2.0", "id": json["id"]}
             assert json["method"] in {"eth_chainId", "eth_getBlockByNumber", "eth_call", "eth_gasPrice"}
-            result = await self.hedera.rpc(json["method"], *json["params"])
-            body = {"jsonrpc": "2.0", "id": json["id"], "result": result}
+            body["result"] = ("0x0" if json["method"] == "eth_gasPrice" and self.hedera.gas_down
+                              else await self.hedera.rpc(json["method"], *json["params"]))
         elif url == "https://api.kucoin.com/api/v1/bullet-public":
             assert method == "POST"
             body = {"code": "400100", "data": {}}
@@ -93,25 +94,19 @@ def test_recorded_shapes_through_foreground_and_cli(tmp_path, monkeypatch):
     args = ["--data-dir", str(data)]
     assert cli.main([*args, "init", "--config", str(CONFIG)]) == 0
     session = ReplaySession()
+    session.hedera.gas_down = True
     monkeypatch.setattr("arbitrage.runtime.aiohttp.ClientSession", lambda **options: session)
     now = POOL_TIME + timedelta(seconds=1)
-    persisted = asyncio.Event()
-
-    class SingleCycleRuntime(Runtime):
-        def _health(self, public, engine, cycle=None):
-            super()._health(public, engine, cycle)
-            if cycle is not None:
-                persisted.set()
-
-    controlled = asyncio.Event()
-
-    async def sleep(seconds):
-        if seconds == 0.25:
-            await controlled.wait()
-        else:
+    async def advance(delay):
+        nonlocal now
+        if delay == 0.25:
             await asyncio.Future()
+        now += timedelta(seconds=delay)
+        session.hedera.source = now - timedelta(seconds=1)
+        session.exchange.depth["time"] = int(session.hedera.source.timestamp() * 1000)
+        await asyncio.sleep(0)
 
-    runtime = SingleCycleRuntime(data, clock=lambda: now, sleep=sleep)
+    runtime = Runtime(data, clock=lambda: now, sleep=advance, jitter=lambda *_: 0)
     config = load_config(CONFIG)
 
     def balances():
@@ -119,26 +114,18 @@ def test_recorded_shapes_through_foreground_and_cli(tmp_path, monkeypatch):
             return tx._db.execute("SELECT * FROM balances ORDER BY holding").fetchall()
 
     opening = [tuple(row) for row in balances()]
-
-    async def cycle_then_pause():
-        with runtime.owner():
-            activation = runtime.activate("start", "worker-2", config)
-            task = asyncio.create_task(runtime.run(*activation, asyncio.Event()))
-            try:
-                await asyncio.wait_for(persisted.wait(), 2)
-                runtime.control("paused")
-                controlled.set()
-                await asyncio.wait_for(task, 2)
-            finally:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-
-    asyncio.run(cycle_then_pause())
-    assert session.requests
-    assert runtime.status()["session"]["state"] == "paused"
     with runtime.owner():
-        assert runtime.activate("recover", None) is None
-        assert runtime.activate("resume", None, config)[0] == "worker-2"
+        activation = runtime.activate("start", "worker-2", config)
+        with pytest.raises(StartupBlocked):
+            asyncio.run(runtime.run(*activation, asyncio.Event()))
+        readiness = runtime.status()["readiness"]
+        assert readiness["state"] == "STARTUP_BLOCKED"
+        assert readiness["reason"] == "gas_price_invalid"
+        assert readiness["checks"]["buy_gas"]["outcome"] == "UNKNOWN"
+        assert readiness["checks"]["sell_gas"]["outcome"] == "UNKNOWN"
+        with pytest.raises(StartupBlocked):
+            runtime.activate("recover", None)
+    assert session.requests
     assert cli.main([*args, "stop"]) == 0
     assert cli.main([*args, "status"]) == 0
     assert cli.main([*args, "report"]) == 0
@@ -146,17 +133,11 @@ def test_recorded_shapes_through_foreground_and_cli(tmp_path, monkeypatch):
     assert runtime.status()["emergency_latched"]
     assert [tuple(row) for row in balances()] == opening
     with sqlite3.connect(runtime.storage.path) as db:
-        payload, = db.execute("SELECT payload FROM analysis_cycles").fetchone()
-        evaluations = json.loads(payload)["evaluations"]
-        assert {item["direction"] for item in evaluations} == {"buy_dex", "sell_dex"}
-        assert {(item["status"], item["reason"]) for item in evaluations} == {
-            ("market_candidate", "gas_unknown"),
-        }
-        assert all(item["requested_dex"]["base_units"] == 100_000_000_000 for item in evaluations)
-        for table in ("simulated_trades", "simulation_events", "reservations", "ledger", "executions"):
+        for table in ("analysis_cycles", "analyzed_snapshots", "simulated_trades", "simulation_events",
+                      "reservations", "ledger", "executions"):
             assert db.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
     with (data / "report.xlsx").open("rb") as stream:
         book = load_workbook(stream)
-        assert len(list(book["Observations"].values)) == 3
+        assert len(list(book["Observations"].values)) == 1
         assert all(row[7:9] == (0, 0) for row in list(book["Balances"].values)[1:])
         book.close()

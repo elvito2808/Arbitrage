@@ -12,16 +12,17 @@ from uuid import uuid4
 from .config import Simulation
 from .kucoin import SYMBOL, Book, InsufficientDepth, KuCoin, priced_units, validate_book
 from .market_data import (
-    MAX_AGE, MAX_SKEW, TRADE_UNITS, MarketDataError, PublicConnections, StaleSnapshot, Unavailable,
-    require_fresh, utc_now,
+    MAX_AGE, MAX_SKEW, TRADE_UNITS, MarketDataError, MarketIdentityError, PublicConnections, StaleSnapshot, Unavailable,
+    MarketFailure, ProviderTimeout, market_errors, market_failure, require_fresh, utc_now,
 )
 from .models import (
     MAX_UNITS, AnalysisCycle, Asset, Direction, Evaluation, EvaluationStatus,
     Holding, KuCoinBookObservation, MarketQuote, Reason, Side, SnapshotObservation, Venue, Worker, WorkerState,
     normalize_time,
 )
+from .readiness import Diagnostic
 from .saucerswap import (
-    WEIBARS_PER_TINYBAR, GasEstimate, PoolSnapshot, RouteGasEvidence, SaucerSwap, amounts, gas_cost_tinybars,
+    GasEstimate, PoolSnapshot, RouteGasEvidence, SaucerSwap, amounts, gas_cost_tinybars,
 )
 from .storage import Storage, Transaction
 
@@ -43,8 +44,9 @@ def usdt(units: int) -> Decimal:
 
 
 class InvalidCycle(ValueError):
-    def __init__(self, reason: Reason):
+    def __init__(self, reason: Reason, failure: MarketFailure | None = None):
         self.reason = reason
+        self.failure = failure
         super().__init__(reason.value)
 
 
@@ -69,6 +71,11 @@ class OpportunityCoordinator:
         self.cex = cex
         self.clock = clock
         self.gate = gate
+        self.market_gate = None
+        self.session_id = None
+        self.on_cycle_start = None
+        self.on_cycle_cancel = None
+        self.on_market_failure = None
         self.age = min(MAX_AGE, timedelta(seconds=settings.cache_ttl_seconds))
         self.fee = Fraction(settings.cex_fee_fraction)
         self.profit_floor = max(Fraction("0.10"), Fraction(settings.minimum_profit_usdt))
@@ -82,10 +89,7 @@ class OpportunityCoordinator:
     ) -> "OpportunityCoordinator":
         age = timedelta(seconds=settings.cache_ttl_seconds)
         return cls(
-            storage, settings, SaucerSwap(
-                public, age, estimate_sender=settings.hedera_estimate_sender,
-                slippage=min(Fraction("0.005"), Fraction(settings.slippage_fraction)),
-            ),
+            storage, settings, SaucerSwap(public, age, settings=settings),
             KuCoin(public, fee=settings.cex_fee_fraction, cache_age=age), clock=public.clock,
         )
 
@@ -100,16 +104,25 @@ class OpportunityCoordinator:
         return normalize_time(self.clock())
 
     def _timing(self, pool: PoolSnapshot, book: Book, now: datetime) -> None:
-        try:
-            for snap in (pool, book):
+        for provider, snap in (("saucerswap", pool), ("market", book)):
+            try:
                 require_fresh(snap.source_at, snap.received_at, now, self.age)
-        except (MarketDataError, TypeError):
-            raise InvalidCycle(Reason.STALE_OR_INVALID_CLOCK) from None
+            except StaleSnapshot:
+                raise InvalidCycle(Reason.STALE_OR_INVALID_CLOCK, MarketFailure(
+                    provider, "snapshot_pair", Diagnostic.STALE_SNAPSHOT,
+                    source_age_ms=(now - snap.source_at) // timedelta(milliseconds=1),
+                    receipt_age_ms=(now - snap.received_at) // timedelta(milliseconds=1),
+                )) from None
+            except TypeError:
+                raise InvalidCycle(Reason.STALE_OR_INVALID_CLOCK) from None
         if (
             abs(pool.source_at - book.source_at) > MAX_SKEW
             or abs(pool.received_at - book.received_at) > MAX_SKEW
         ):
-            raise InvalidCycle(Reason.CROSS_VENUE_SKEW)
+            raise InvalidCycle(Reason.CROSS_VENUE_SKEW, MarketFailure(
+                "market", "snapshot_pair", Diagnostic.CROSS_VENUE_SKEW,
+                timestamp_delta_ms=(pool.source_at - book.source_at) // timedelta(milliseconds=1),
+            ))
 
     @staticmethod
     def _observations(
@@ -170,20 +183,60 @@ class OpportunityCoordinator:
         gross = priced_units(book.asks, Side.BUY, Fraction(0))
         return Market(pool, book, dex, cex, quotes, gross)
 
-    async def _read(self) -> tuple[PoolSnapshot, Book, datetime]:
-        # Owner-approved sequential sampling: DEX first, then KuCoin.
-        # Keep one bounded deadline for the complete two-venue read.
-        async with asyncio.timeout(READ_DEADLINE):
-            pool = await self.dex.snapshot()
-            dex_completed = self._now()
-            book = await self.cex.snapshot()
+    async def _read(self, *, on_result=None) -> tuple[PoolSnapshot, Book, datetime]:
+        # DEX first, then KuCoin, with one deadline. Preflight can observe
+        # independent outcomes even if one venue fails.
+        errors = []
+        provider, operation = "saucerswap", "pool_snapshot"
+        try:
+            async with asyncio.timeout(READ_DEADLINE):
+                try:
+                    pool = await self.dex.snapshot()
+                except (MarketDataError, ExceptionGroup, TimeoutError) as error:
+                    failures = self._read_errors(error, provider, operation)
+                    if on_result is None:
+                        raise
+                    errors.extend(failures)
+                else:
+                    if on_result is not None:
+                        on_result("dex", pool)
+                dex_completed = self._now()
+                provider, operation = "kucoin_rest", "depth_snapshot"
+                try:
+                    book = await self.cex.snapshot()
+                except (MarketDataError, ExceptionGroup, TimeoutError) as error:
+                    failures = self._read_errors(error, provider, operation)
+                    if on_result is None:
+                        raise
+                    errors.extend(failures)
+                else:
+                    if on_result is not None:
+                        on_result("cex", book)
+        except TimeoutError:
+            if on_result is None and self.on_market_failure is None:
+                raise
+            errors.append(ProviderTimeout("market read deadline exceeded", MarketFailure(
+                provider, operation, Diagnostic.PROVIDER_TIMEOUT,
+            )))
+        if errors:
+            raise ExceptionGroup("preflight market verification failed", errors)
         return pool, book, dex_completed
 
     @staticmethod
+    def _read_errors(error, provider, operation):
+        failures = market_errors(error)
+        for item in failures:
+            if isinstance(item, MarketDataError) and item.failure is None:
+                item.failure = market_failure(item, provider, operation)
+        return failures
+
+    @staticmethod
     def _failure(error: Exception) -> Reason:
-        errors = error.exceptions if isinstance(error, ExceptionGroup) else (error,)
+        errors = market_errors(error)
         if any(not isinstance(item, (InvalidCycle, MarketDataError, TimeoutError)) for item in errors):
             raise error
+        if any(isinstance(item, MarketIdentityError) for item in errors):
+            return Reason.MARKET_IDENTITY_MISMATCH
         for item in errors:
             if isinstance(item, InvalidCycle):
                 return item.reason
@@ -219,7 +272,18 @@ class OpportunityCoordinator:
             raise InvalidCycle(Reason.GAS_INVALID) from None
         if observed < market.pool.received_at:
             raise InvalidCycle(Reason.GAS_INVALID)
-        if evidence.rpc is not None:
+        if evidence.configured is not None:
+            basis = evidence.configured
+            if (
+                evidence.rpc is not None or not isinstance(self.dex, SaucerSwap)
+                or not self.dex.verifies_route_gas(gas, market.pool)
+                or not market.pool.router_verified
+                or basis.configured_gas_units != gas.execution_gas
+                or basis.price_observed_at != observed or prices != (basis.gas_price_weibars, 2 * basis.gas_price_weibars)
+            ):
+                raise InvalidCycle(Reason.GAS_INVALID)
+            budget = ceil(gas_cost_tinybars(gas.execution_gas, prices[0]) * self.gas_cap)
+        elif evidence.rpc is not None:
             if (
                 not isinstance(self.dex, SaucerSwap)
                 or not self.dex.verifies_route_gas(gas, market.pool)
@@ -229,8 +293,9 @@ class OpportunityCoordinator:
         elif gas.execution_gas in (34_133, 244_829):
             # Reject legacy measurements passed as unverified fixture evidence.
             raise InvalidCycle(Reason.GAS_INVALID)
-        capped_price = min(prices[1], int(prices[0] * self.gas_cap))
-        budget = gas_cost_tinybars(gas.execution_gas, capped_price)
+        if evidence.configured is None:
+            capped_price = min(prices[1], int(prices[0] * self.gas_cap))
+            budget = gas_cost_tinybars(gas.execution_gas, capped_price)
         if budget > MAX_UNITS:
             raise InvalidCycle(Reason.GAS_INVALID)
         return budget, self._gas_cost_usdc(budget, market), evidence.id
@@ -289,11 +354,12 @@ class OpportunityCoordinator:
             gas_budget_tinybars=budget,
         )
         rpc = gas.route_evidence.rpc
-        if rpc is not None:
-            estimate_tinybars = gas_cost_tinybars(rpc.estimated_gas, rpc.gas_price_weibars)
+        configured = gas.route_evidence.configured
+        if rpc is not None or configured is not None:
+            estimate_tinybars = gas_cost_tinybars(gas.execution_gas, gas.price_range_weibars[0])
             estimate_usdc = self._gas_cost_usdc(estimate_tinybars, market)
             fields.update(
-                gas_rpc=rpc,
+                gas_rpc=rpc, configured_gas=configured,
                 estimated_gas_hbar=Decimal(f"{estimate_tinybars}e-8"),
                 estimated_gas_usdc=usdt(estimate_usdc),
                 dex_net_quote_usdc=usdt(dex.quote_units + estimate_usdc if buy_dex else dex.quote_units - estimate_usdc),
@@ -315,12 +381,13 @@ class OpportunityCoordinator:
     def _miss(
         cycle_id: str, worker_id: str, now: datetime, reason: Reason,
         observations: tuple[SnapshotObservation | None, SnapshotObservation | None] = (None, None),
+        *, session_id=None,
     ) -> AnalysisCycle:
         status = (EvaluationStatus.REJECTED if reason in {
             Reason.DUPLICATE_SNAPSHOT, Reason.CYCLE_BUSY, Reason.NETWORK_QUOTA, Reason.WORKER_INACTIVE,
         } else EvaluationStatus.INSUFFICIENT_DATA)
         return AnalysisCycle(
-            id=cycle_id, worker_id=worker_id, observed_at=now,
+            id=cycle_id, worker_id=worker_id, observed_at=now, session_id=session_id,
             dex_snapshot=observations[0], cex_snapshot=observations[1],
             evaluations=tuple(Evaluation(direction=direction, status=status, reason=reason)
                               for direction in Direction),
@@ -346,21 +413,30 @@ class OpportunityCoordinator:
                 self._timing(market.pool, market.book, now)
             except InvalidCycle as error:
                 reason = error.reason
-        if reason is None:
+        admission_blocked = None
+        if reason is None and self.market_gate:
+            reason = self.market_gate(tx, market, now)
+            if reason in (Reason.GAS_INVALID, Reason.GAS_UNKNOWN):
+                admission_blocked = reason
+                reason = None
+        if reason is None and admission_blocked is None:
             ids = self._snapshot_ids(market)
             if any(tx.seen_snapshot(NETWORK, key) for key in ids):
                 reason = Reason.DUPLICATE_SNAPSHOT
         if reason is not None:
-            result = self._miss(cycle_id, worker_id, now, reason, observations)
+            result = self._miss(cycle_id, worker_id, now, reason, observations, session_id=self.session_id)
             tx.add_analysis(NETWORK, result)
         else:
             result = AnalysisCycle(
-                id=cycle_id, worker_id=worker_id, observed_at=now,
+                id=cycle_id, worker_id=worker_id, observed_at=now, session_id=self.session_id,
                 dex_snapshot=observations[0], cex_snapshot=observations[1],
                 evaluations=tuple(self._evaluate(tx, direction, market, now) for direction in Direction),
             )
-            tx.add_analysis(NETWORK, result, ids)
-            self._after_analysis(tx, result, market, now)
+            tx.add_analysis(NETWORK, result, ids if admission_blocked is None else ())
+            if admission_blocked is None:
+                self._after_analysis(tx, result, market, now)
+            elif any(item.status == EvaluationStatus.ELIGIBLE for item in result.evaluations):
+                tx.simulation_miss(cycle_id, admission_blocked)
         tx.release_analysis(NETWORK, cycle_id, now)
         return result
 
@@ -375,13 +451,17 @@ class OpportunityCoordinator:
 
     async def _cycle(self, worker_id: str) -> AnalysisCycle:
         cycle_id = uuid4().hex
+        if self.on_cycle_start:
+            self.on_cycle_start(cycle_id)
         with self.storage.transaction() as tx:
             now = self._now()
             denied = self.gate(tx, worker_id, now) if self.gate else None
+            if denied == Reason.READINESS_BLOCKED:
+                return self._miss(cycle_id, worker_id, now, denied, session_id=self.session_id)
             if denied is None:
                 denied = tx.claim_analysis(NETWORK, cycle_id, worker_id, now, LEASE, MIN_INTERVAL)
             if denied:
-                result = self._miss(cycle_id, worker_id, now, denied)
+                result = self._miss(cycle_id, worker_id, now, denied, session_id=self.session_id)
                 tx.add_analysis(NETWORK, result)
                 return result
         recorded = False
@@ -390,10 +470,19 @@ class OpportunityCoordinator:
             observations = (None, None)
             try:
                 pool, book, dex_completed = await self._read()
+                if self.on_market_failure and isinstance(self.dex, SaucerSwap):
+                    diagnostics = self.dex.failures
+                    if self.cex.rest_failure is not None:
+                        diagnostics = (*diagnostics, self.cex.rest_failure)
+                    for failure in diagnostics:
+                        self.on_market_failure(cycle_id, failure)
                 observations = self._observations(pool, book, dex_completed)
                 market = self._market(pool, book, observations, self._now())
             except (InvalidCycle, MarketDataError, TimeoutError, ExceptionGroup) as error:
                 reason = self._failure(error)
+                if self.on_market_failure:
+                    for item in market_errors(error):
+                        self.on_market_failure(cycle_id, market_failure(item))
             with self.storage.transaction() as tx:
                 result = self._record(tx, cycle_id, worker_id, market, reason, observations)
             recorded = True
@@ -403,7 +492,10 @@ class OpportunityCoordinator:
                 with self.storage.transaction() as tx:
                     now = self._now()
                     reason = self.gate(tx, worker_id, now) or Reason.CYCLE_INTERRUPTED
-                    tx.add_analysis(NETWORK, self._miss(cycle_id, worker_id, now, reason))
+                    cancelled = self._miss(cycle_id, worker_id, now, reason, session_id=self.session_id)
+                    tx.add_analysis(NETWORK, cancelled)
+                if self.on_cycle_cancel:
+                    self.on_cycle_cancel(cancelled)
             raise
         finally:
             if not recorded:

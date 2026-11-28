@@ -99,6 +99,7 @@ def observations(db, sheets):
         } else None
         for item in cycle.evaluations:
             gas = item.gas_rpc
+            configured = item.configured_gas
             admitted = row["admitted_direction"] == item.direction
             sheets.write("Observations", reference(cycle.id), reference(cycle.worker_id), NETWORK, PAIR,
                          cycle.observed_at.isoformat(), item.direction, item.status, item.reason,
@@ -110,7 +111,14 @@ def observations(db, sheets):
                          gas.provider if gas else None, gas.block if gas else None,
                          gas.estimated_at.isoformat() if gas else None,
                          gas.estimated_gas if gas else None, gas.gas_price_weibars if gas else None,
-                         item.estimated_gas_hbar, item.estimated_gas_usdc, item.dex_net_quote_usdc)
+                         item.estimated_gas_hbar, item.estimated_gas_usdc, item.dex_net_quote_usdc,
+                         configured.source if configured else None,
+                         configured.provider if configured else None,
+                         configured.configured_gas_units if configured else None,
+                         configured.gas_limit if configured else None,
+                         configured.gas_price_weibars if configured else None,
+                         configured.price_observed_at.isoformat() if configured else None,
+                         Decimal(item.gas_budget_tinybars).scaleb(-8) if item.gas_budget_tinybars else None)
             for requested in (item.requested_dex, item.requested_cex):
                 if requested:
                     sheets.write("Requested quotes", reference(cycle.id), item.direction, *quote(requested))
@@ -243,15 +251,17 @@ def export(database: Path, destination: Path):
         "Observations": ("cycle", "worker", "network", "pair", "observed UTC", "direction", "evaluation",
                          "reason", "admitted", "trade status", "simulation miss", "DEX snapshot",
                          "DEX source UTC", "DEX received UTC", "CEX snapshot", "CEX source UTC",
-                         "CEX received UTC", "indicative USDT", "estimated gas USDT", "evaluated net USDT",
+                         "CEX received UTC", "indicative USDT", "capped gas USDT", "evaluated net USDT",
                          "stressed USDT", "gas budget tinybars", "gas provenance", "gas estimation error",
                          "gas RPC provider", "gas estimate block", "gas estimate UTC", "estimated gas units",
                          "RPC gas price weibars", "estimated gas HBAR", "estimated gas USDC",
-                         "DEX net quote USDC"),
+                         "DEX net quote USDC", "gas estimation method", "gas price provider",
+                         "configured gas units", "configured gas limit", "live RPC gas price weibars",
+                         "live RPC gas price observed UTC", "maximum gas budget HBAR"),
         "Requested quotes": ("cycle", "direction", *QUOTE),
         "Trades": ("trade", "direction", "status", "accepted UTC", "gas quote UTC", "route gas units",
                    "network gas weibars", "cap gas weibars", "modeled gas per attempt tinybars",
-                   "gas budget tinybars", "estimated gas USDT", "configured CEX fee rate",
+                   "gas budget tinybars", "capped gas USDT", "configured CEX fee rate",
                    "known CEX fees microUSDT", "known gas tinybars", "booked stablecoin delta micro units",
                    "booked base delta 1e-8 units", "ledger reconciled", "realized net microUSDT under parity"),
         "Execution events": ("trade", "event", "direction", "leg", "recorded UTC", "due UTC", "attempt",

@@ -1,155 +1,111 @@
 import asyncio
 from dataclasses import replace
-from datetime import timedelta
 from fractions import Fraction
 
 import pytest
 
 from arbitrage.config import load_config, parse_config
 from arbitrage.market_data import RPC, MarketDataError, PublicConnections, Unavailable
-from arbitrage.models import Side
-from arbitrage.saucerswap import (
-    EXACT_INPUT_SELECTOR, EXACT_OUTPUT_SELECTOR, FEE_PROVIDER, HISTORICAL_GAS, ROUTER, TRADE_UNITS, USDC,
-    WHBAR, SaucerSwap, gas_cost_tinybars, words,
-)
+from arbitrage.models import GAS_SOURCE, Side
+from arbitrage.saucerswap import FEE_PROVIDER, HISTORICAL_GAS, SaucerSwap, gas_cost_tinybars
 
 from test_coordinator import CONFIG
-from test_market_data import BLOCK, HASH, Hedera, POOL_TIME
+from test_market_data import Hedera
 
-SENDER = "0x" + "12" * 20
+REFERENCE_WEIBARS = 1_540_000_000_000
 
 
-class Estimator(Hedera):
-    def __init__(self):
+class GasPriceReplay(Hedera):
+    def __init__(self, result=hex(REFERENCE_WEIBARS)):
         super().__init__()
-        self.calls = []
-        self.outcomes = {Side.BUY: hex(145_000), Side.SELL: hex(165_000)}
-        self.head_changed = False
-        self.advance_time = False
+        self.result = result
+        self.reads = []
 
     async def rpc(self, method, *params):
-        if method == "eth_getBlockByNumber" and self.head_changed and self.calls:
-            return {"number": hex(BLOCK + 1), "hash": HASH}
-        if method != "eth_estimateGas":
-            return await super().rpc(method, *params)
-        call, block = params
-        assert block == "latest"
-        side = Side.BUY if call["data"][2:10] == EXACT_OUTPUT_SELECTOR else Side.SELL
-        self.calls.append((side, call))
-        if self.advance_time and side == Side.SELL:
-            self.now = POOL_TIME + timedelta(seconds=10.1)
-        result = self.outcomes[side]
-        if isinstance(result, Exception):
-            raise result
-        return result
+        self.reads.append(method)
+        assert method in {"eth_chainId", "eth_getBlockByNumber", "eth_call", "eth_gasPrice"}
+        if method == "eth_gasPrice":
+            assert not params
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+        return await super().rpc(method, *params)
 
 
-def test_bidirectional_estimate_requests_and_adapter_bound_evidence():
-    provider = Estimator()
-    dex = SaucerSwap(provider, estimate_sender=SENDER)
+def test_configured_directions_share_only_the_live_price():
+    provider = GasPriceReplay()
+    settings = parse_config(CONFIG.read_bytes().replace(b"sell_gas_units = 109478", b"sell_gas_units = 110000"))
+    dex = SaucerSwap(provider, settings=settings.simulation)
     snap = asyncio.run(dex.snapshot())
-    buy, sell = snap.gas
-    assert len(provider.calls) == 2
-    assert {side for side, _ in provider.calls} == {Side.BUY, Side.SELL}
-    assert (buy.execution_gas, sell.execution_gas) == (145_000, 165_000)
-    assert buy.route_evidence.id != sell.route_evidence.id
-    for side, call in provider.calls:
-        is_buy = side == Side.BUY
-        gas = buy if is_buy else sell
-        expected_path = (USDC, WHBAR) if is_buy else (WHBAR, USDC)
-        provenance = gas.route_evidence.rpc
-        assert call == {"from": SENDER, "to": ROUTER, "data": provenance.calldata, "value": "0x0"}
-        assert call["data"][2:10] == (EXACT_OUTPUT_SELECTOR if is_buy else EXACT_INPUT_SELECTOR)
-        assert words("0x" + call["data"][10:], 8) == (
-            TRADE_UNITS, 53_025_571 if is_buy else 52_155_926, 160, int(SENDER, 16),
-            int(POOL_TIME.timestamp()) + 10, 2, *(int(address, 16) for address in expected_path),
-        )
-        assert provenance.path == expected_path and provenance.value_weibars == 0
-        assert (provenance.provider, provenance.chain_id) == (FEE_PROVIDER, 295)
-        assert (provenance.block, provenance.block_hash) == (BLOCK, HASH)
-        assert provenance.estimated_gas == gas.execution_gas
-        assert provenance.gas_price_weibars == 1_630_000_000_000
-        assert provenance.estimated_at == gas.observed_at == provider.now
-        assert provenance.price_observed_at == provider.now
+    assert provider.reads.count("eth_gasPrice") == provider.reads.count("eth_getBlockByNumber") == 1
+    assert snap.gas[0].route_evidence.id != snap.gas[1].route_evidence.id
+    for side, gas, units in zip(Side, snap.gas, (109_478, 110_000), strict=True):
+        evidence = gas.route_evidence
+        basis = evidence.configured
+        assert (evidence.side, evidence.execution_gas, evidence.rpc) == (side, units, None)
+        assert (basis.source, basis.provider, basis.chain_id) == (GAS_SOURCE, FEE_PROVIDER, 295)
+        assert (basis.configured_gas_units, basis.gas_limit) == (units, 300_000)
+        assert (basis.gas_price_weibars, basis.price_observed_at) == (REFERENCE_WEIBARS, provider.now)
         assert dex.verifies_route_gas(gas, snap)
         assert not dex.verifies_route_gas(replace(gas), snap)
         assert not dex.verifies_route_gas(gas, replace(snap))
 
 
-@pytest.mark.parametrize(("sell_result", "error", "invalid"), [
-    (Unavailable("fixture outage"), "route_estimate_unavailable", False),
-    (MarketDataError("fixture revert"), "route_estimate_unavailable", False),
-    ("0x0", "route_estimate_invalid", True),
-    ("0x012345", "route_estimate_invalid", True),
-    ("0xnot-gas", "route_estimate_invalid", True),
-    (hex(15_000_001), "route_estimate_invalid", True),
+@pytest.mark.parametrize(("result", "error"), [
+    (Unavailable("fixture outage"), "gas_price_unavailable"),
+    ("0x0", "gas_price_invalid"),
+    ("0x012345", "gas_price_invalid"),
+    ("not a quantity", "gas_price_invalid"),
+    (hex(10**18 + 1), "gas_price_invalid"),
 ])
-def test_invalid_sell_never_inherits_buy_gas(sell_result, error, invalid):
-    provider = Estimator()
-    provider.outcomes[Side.SELL] = sell_result
-    pool = asyncio.run(SaucerSwap(provider, estimate_sender=SENDER).snapshot())
-    buy, sell = pool.gas
-    assert buy.cost_valid
-    assert not sell.cost_valid and sell.execution_gas is None and sell.route_evidence is None
-    assert sell.estimation_error == error and sell.invalid == invalid
+def test_missing_and_invalid_prices_fail_closed_in_both_directions(result, error):
+    pool = asyncio.run(SaucerSwap(GasPriceReplay(result)).snapshot())
     assert len(pool.quotes) == 2
+    for gas in pool.gas:
+        assert gas.estimation_error == error
+        assert gas.invalid == (error == "gas_price_invalid")
+        assert gas.price_range_weibars is None and gas.route_evidence is None and not gas.cost_valid
 
 
-@pytest.mark.parametrize(("field", "error"), [
-    ("head_changed", "route_estimate_head_changed"),
-    ("router_down", "route_context_unverified"),
-    ("gas_down", "gas_price_unavailable"),
-])
-def test_unverified_shared_context_preserves_gross_quotes(field, error):
-    provider = Estimator()
-    setattr(provider, field, True)
-    pool = asyncio.run(SaucerSwap(provider, estimate_sender=SENDER).snapshot())
-    assert all(gas.estimation_error == error and not gas.cost_valid for gas in pool.gas)
-    assert len(pool.quotes) == 2
-    assert len(provider.calls) == (2 if field == "head_changed" else 0)
-
-
-def test_route_deadline_rejects_estimate_before_quote_ttl():
-    provider = Estimator()
-    provider.advance_time = True
-    pool = asyncio.run(SaucerSwap(provider, estimate_sender=SENDER).snapshot())
-    buy, sell = pool.gas
-    assert buy.cost_valid
-    assert not sell.cost_valid and sell.invalid
-    assert sell.estimation_error == "route_estimate_invalid"
-
-
-def test_historical_calibration_and_tinybar_ceiling():
-    assert HISTORICAL_GAS.gas_limit == 1_120_000 and HISTORICAL_GAS.gas_used == 143_161
-    assert HISTORICAL_GAS.output_usdc_units == 53_048_295
+def test_reference_arithmetic_and_tinybar_ceiling():
     assert HISTORICAL_GAS.calculated_gas_tinybars == HISTORICAL_GAS.charged_gas_tinybars
-    assert Fraction(HISTORICAL_GAS.charged_gas_tinybars, 10**8) == Fraction("0.22762599")
+    estimated = gas_cost_tinybars(109_478, REFERENCE_WEIBARS)
+    assert Fraction(estimated, 10**8) == Fraction("0.16859612")
+    assert Fraction(estimated * 2, 10**8) == Fraction("0.33719224")
     assert gas_cost_tinybars(21_001, 15_000_000_001) == 31_502
 
 
-def test_only_public_sender_is_configurable():
-    assert load_config(CONFIG).simulation.hedera_estimate_sender is None
-    config = CONFIG.read_bytes()
-    insertion = b"[simulation]\n"
-    configured = config.replace(insertion, insertion + f'hedera_estimate_sender="{SENDER}"\n'.encode())
-    assert parse_config(configured).simulation.hedera_estimate_sender == SENDER
-    for rejected in ("0x" + "0" * 40, "0x" + "a" * 64, "not-an-address"):
-        invalid = config.replace(insertion, insertion + f'hedera_estimate_sender="{rejected}"\n'.encode())
-        with pytest.raises(ValueError, match="invalid simulation configuration"):
-            parse_config(invalid)
+@pytest.mark.parametrize(("key", "old", "invalid"), [
+    ("buy_gas_units", "109478", "0"),
+    ("sell_gas_units", "109478", '"109478"'),
+    ("sell_gas_units", "109478", "300001"),
+    ("gas_limit", "300000", "109477"),
+    ("gas_limit", "300000", "true"),
+])
+def test_gas_configuration_validation(key, old, invalid):
+    config = CONFIG.read_bytes().replace(f"{key} = {old}".encode(), f"{key} = {invalid}".encode())
+    with pytest.raises(ValueError, match="invalid simulation configuration"):
+        parse_config(config)
 
 
-def test_rpc_estimation_allowlist_does_not_allow_submission(monkeypatch):
+def test_default_configuration_has_no_sender():
+    settings = load_config(CONFIG).simulation
+    assert settings.hedera_estimate_sender is None
+    assert (settings.buy_gas_units, settings.sell_gas_units, settings.gas_limit) == (109_478, 109_478, 300_000)
+    assert settings.gas_price_cap_multiple == 2
+
+
+def test_rpc_gas_price_allowlist_does_not_allow_estimation_or_submission(monkeypatch):
     api = PublicConnections(None)
     calls = []
 
     async def fake_json(method, url, payload):
         calls.append((method, url, payload["method"]))
-        return {"jsonrpc": "2.0", "id": payload["id"], "result": hex(150_000)}
+        return {"jsonrpc": "2.0", "id": payload["id"], "result": hex(REFERENCE_WEIBARS)}
 
     monkeypatch.setattr(api, "_json", fake_json)
-    assert asyncio.run(api.rpc("eth_estimateGas", {"to": ROUTER, "value": "0x0"}, "latest")) == hex(150_000)
-    for method in ("eth_sendTransaction", "eth_sendRawTransaction", "personal_sign"):
+    assert asyncio.run(api.rpc("eth_gasPrice")) == hex(REFERENCE_WEIBARS)
+    for method in ("eth_estimateGas", "eth_sendTransaction", "eth_sendRawTransaction", "personal_sign"):
         with pytest.raises(MarketDataError, match="outside the public read scope"):
             asyncio.run(api.rpc(method, {}))
-    assert calls == [("POST", RPC, "eth_estimateGas")]
+    assert calls == [("POST", RPC, "eth_gasPrice")]

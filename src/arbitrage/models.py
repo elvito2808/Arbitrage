@@ -212,6 +212,8 @@ class Reason(StrEnum):
     NETWORK_QUOTA = "network_quota"
     MARKET_UNAVAILABLE = "market_unavailable"
     INVALID_MARKET = "invalid_market"
+    MARKET_IDENTITY_MISMATCH = "market_identity_mismatch"
+    READINESS_BLOCKED = "readiness_blocked"
     STALE_OR_INVALID_CLOCK = "stale_or_invalid_clock"
     CROSS_VENUE_SKEW = "cross_venue_skew"
     PROVENANCE_MISMATCH = "provenance_mismatch"
@@ -242,6 +244,25 @@ class HederaGasProvenance(Record):
     estimated_at: Timestamp
 
 
+GAS_SOURCE = "CONFIGURED_GAS_UNITS + LIVE_RPC_GAS_PRICE"
+
+
+class ConfiguredGasProvenance(Record):
+    source: Literal[GAS_SOURCE] = GAS_SOURCE
+    provider: Identifier
+    chain_id: Literal[295]
+    configured_gas_units: PositiveUnits
+    gas_limit: PositiveUnits
+    gas_price_weibars: PositiveUnits
+    price_observed_at: Timestamp
+
+    @model_validator(mode="after")
+    def validate_limit(self) -> "ConfiguredGasProvenance":
+        if self.configured_gas_units > self.gas_limit:
+            raise ValueError("configured gas units must fit the gas limit")
+        return self
+
+
 class Evaluation(Record):
     direction: Direction
     status: EvaluationStatus
@@ -255,6 +276,7 @@ class Evaluation(Record):
     gas_evidence_id: Identifier | None = None
     gas_budget_tinybars: PositiveUnits | None = None
     gas_rpc: HederaGasProvenance | None = None
+    configured_gas: ConfiguredGasProvenance | None = None
     gas_estimation_error: Identifier | None = None
     dex_net_quote_usdc: Exact | None = None
     estimated_gas_hbar: Exact | None = None
@@ -293,6 +315,7 @@ class SnapshotObservation(Record):
 
 class AnalysisCycle(Record):
     id: Identifier
+    session_id: Identifier | None = None
     worker_id: Identifier
     observed_at: Timestamp
     dex_snapshot: SnapshotObservation | None = None

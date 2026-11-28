@@ -11,6 +11,9 @@ minimum_profit_usdt = "0.10"
 maximum_loss_usdt = "0.30"
 slippage_fraction = "0.005"
 gas_price_cap_multiple = "2"
+buy_gas_units = 109478
+sell_gas_units = 109478
+gas_limit = 300000
 cex_fee_fraction = "0.001"
 usdc_usdt_parity = true
 

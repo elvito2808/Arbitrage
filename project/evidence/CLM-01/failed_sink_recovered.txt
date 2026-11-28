@@ -1,0 +1,3 @@
+OFFLINE SYNTHETIC TEST EVIDENCE
+[22:00:21.253] WARNING [SYSTEM] Console sink resumed; 1 event(s) lost
+[22:00:21.253] INFO [SYSTEM] Starting SIMULATION ONLY (2026-11-27 UTC); foreground logger active; real trading disabled

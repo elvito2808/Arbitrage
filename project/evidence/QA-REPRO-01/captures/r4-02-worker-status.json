@@ -1,0 +1,31 @@
+{
+  "mode": "offline synthetic",
+  "observations": [
+    {
+      "readiness": "WAITING_RETRY",
+      "intent": "running",
+      "worker": "running"
+    },
+    {
+      "readiness": "WAITING_RETRY",
+      "intent": "running",
+      "worker": "running"
+    },
+    {
+      "readiness": "WAITING_RETRY",
+      "intent": "running",
+      "worker": "running"
+    },
+    {
+      "readiness": "STARTUP_BLOCKED",
+      "intent": "running",
+      "worker": "running"
+    }
+  ],
+  "counts": {
+    "analysis_cycles": 0,
+    "simulated_trades": 0,
+    "reservations": 0,
+    "ledger": 0
+  }
+}

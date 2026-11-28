@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import aiohttp
 
-from .market_data import MAX_AGE, TRADE_UNITS, MarketDataError, PublicConnections, Unavailable, require_fresh
+from .market_data import MAX_AGE, TRADE_UNITS, MarketDataError, MarketIdentityError, PublicConnections, Unavailable, market_failure, require_fresh
 from .models import Asset, MarketQuote, Side, Venue
 
 BASE_CURRENCY = "HBAR"
@@ -196,6 +196,8 @@ class KuCoin:
         self._lock = asyncio.Lock()
         self.stream = KuCoinTickerStream(public, self._invalidate)
         self.source = "unavailable"
+        self.rest_verified = False
+        self.rest_failure = None
         self.on_source_change: Callable[[str, str], None] | None = None
         self.depth_stream = KuCoinDepthStream(self)
 
@@ -215,7 +217,7 @@ class KuCoin:
         if (data.get("symbol"), data.get("baseCurrency"), data.get("quoteCurrency")) != (
             SYMBOL, BASE_CURRENCY, QUOTE_CURRENCY,
         ):
-            raise MarketDataError("KuCoin symbol identity mismatch")
+            raise MarketIdentityError("KuCoin symbol identity mismatch")
         base = exact(data.get("baseIncrement"))
         price = exact(data.get("priceIncrement"))
         quote = exact(data.get("quoteIncrement"))
@@ -243,12 +245,15 @@ class KuCoin:
                         )
                     ):
                         raise MarketDataError("KuCoin depth sequence or timestamp regressed")
-            except (Unavailable, TimeoutError):
+            except (Unavailable, TimeoutError) as error:
+                self.rest_failure = market_failure(error, "kucoin_rest", "depth_snapshot")
                 if self._book is None:
-                    raise Unavailable("KuCoin depth unavailable") from None
+                    error_type = type(error) if isinstance(error, Unavailable) else Unavailable
+                    raise error_type("KuCoin depth unavailable", self.rest_failure) from None
                 book = self._book
                 from_cache = True
-            except MarketDataError:
+            except MarketDataError as error:
+                self.rest_failure = market_failure(error, "kucoin_rest", "depth_snapshot")
                 self._invalidate()
                 raise
             if generation != self._generation:
@@ -259,6 +264,7 @@ class KuCoin:
                 self._invalidate()
                 raise
             self._book = book
+            self.rest_verified = not from_cache
             self.cache_hits += int(from_cache)
             return book
 
@@ -269,6 +275,8 @@ class KuCoin:
                 self.on_source_change(source, reason)
 
     async def snapshot(self) -> Book:
+        self.rest_verified = False
+        self.rest_failure = None
         if (
             self.depth_stream.health in ("connecting", "awaiting_depth")
             and not self.depth_stream.initial_attempt.is_set()

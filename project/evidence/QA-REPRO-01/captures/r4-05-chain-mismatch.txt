@@ -1,0 +1,18 @@
+OFFLINE SYNTHETIC QA-REPRO-01 EVIDENCE
+[01:30:15.000] INFO [SYSTEM] Starting SIMULATION ONLY (2026-11-26 UTC); foreground logger active; real trading disabled worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73
+[01:30:15.000] INFO [CONFIG] Applied simulation configuration worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 capacity=3 active_limit=1 chain_id=295 trade_hbar=1000 profit_usdt=0.1 loss_usdt=0.3 slippage=0.005 fee=0.001 gas_cap=2 ttl_seconds=10 interval_seconds=15 network=hedera:295 market=HBAR-USDT dex_market=WHBAR-USDC mode=simulation parity=True deadline=2026-11-27T01:30:15+00:00
+[01:30:15.000] INFO [HEALTH] STARTING worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 delay_seconds=UNKNOWN attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 check=configuration outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 check=storage outcome=PASS attempt=1
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 previous=UNKNOWN delta=UNKNOWN total=50000.00000000 reserved=0.00000000 available=50000.00000000 holding=dex.WHBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 previous=UNKNOWN delta=UNKNOWN total=3000.000000 reserved=0.000000 available=3000.000000 holding=dex.USDC phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 previous=UNKNOWN delta=UNKNOWN total=1000.00000000 reserved=0.00000000 available=1000.00000000 holding=dex.HBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 previous=UNKNOWN delta=UNKNOWN total=50000.00000000 reserved=0.00000000 available=50000.00000000 holding=cex.HBAR phase=opening reconciliation=PASS
+[01:30:15.000] INFO [BALANCE] Persisted balance worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 previous=UNKNOWN delta=UNKNOWN total=3000.000000 reserved=0.000000 available=3000.000000 holding=cex.USDT phase=opening reconciliation=PASS
+[01:30:15.000] INFO [HEALTH] Readiness check worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 check=recovery outcome=PASS attempt=1
+[01:30:15.000] INFO [HEALTH] PREFLIGHT_CHECKING worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 delay_seconds=UNKNOWN attempt=1
+[01:30:15.000] ERROR [HEALTH] Readiness check worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 check=snapshots outcome=FAIL diagnostic=market_identity_mismatch attempt=1
+[01:30:15.000] ERROR [HEALTH] STARTUP_BLOCKED worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 delay_seconds=UNKNOWN diagnostic=market_identity_mismatch attempt=1
+[01:30:15.000] INFO [SYSTEM] worker_state worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73
+[01:30:15.000] INFO [SYSTEM] Session lifecycle worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 intent=startup_blocked
+[01:30:15.000] INFO [SYSTEM] Session summary worker=worker-1 session=8f606ac9c5b2484db01111e078e18f73 cycles=0 admissions=0 filled=0 failed=0 incomplete=0 manual_review=0 active=0 cycle_errors=0 console_drops=0

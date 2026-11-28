@@ -61,22 +61,14 @@ two seconds of allowed source-ahead skew. An invalid response drops the cache.
 WebSocket connection, subscription, liveness and depth freshness have bounded
 timeouts. Reconnection uses bounded backoff while REST remains available.
 
-Gas uses independent exact-output BUY and exact-input SELL requests to the
-router. Set `simulation.hedera_estimate_sender` to a public EVM address
-whose existing token balances, associations and allowance permit read-only
-simulation. The default leaves the sender unset and preserves gross pricing.
-The configured Hashio relay estimates on latest state, so an intervening head
-change invalidates an estimate. The adapter records the route request,
-chain, block, provider, gas units, price and timestamps. Gas pricing uses
-weibars per gas and rounds cost up to tinybars. The observed gas price and
-its 2× cap define the scenario range.
-
-The owner’s historical calibration is 143,161 gas at 1,590 gWei per gas,
-or 0.22762599 HBAR, for the native-input WHBAR→USDC transaction. That
-measurement is recorded separately from estimates for the current two
-ERC-20 routes. The estimated execution-gas component may differ from a
-future network charge. The coordinator values it from the same fresh,
-fee-free HBAR-USDT depth using the approved simulation parity assumption.
+Gas uses `CONFIGURED_GAS_UNITS + LIVE_RPC_GAS_PRICE`. The simulation
+configuration specifies 109,478 gas units for BUY and SELL and a limit of
+300,000 for validation. Hashio supplies the current price through
+`eth_gasPrice` in weibars per gas unit. Multiply the configured units by
+the price and round up to a whole tinybar. Apply the 2× budget multiplier
+and round up again if needed. A single fresh price sample serves both
+directions. Gas estimation requires no wallet, account state, or swap
+simulation. Missing, invalid, or stale gas prices block admission.
 
 Run `python -m pytest` for offline verification. The separately opted-in
 `ARB_PUBLIC_SMOKE=1 python -m pytest -s tests/test_market_smoke.py` bounds each
@@ -106,13 +98,12 @@ then uses the already fee-adjusted quote totals for profit. BUY DEX maps
 WHBAR acquired on Hedera to HBAR sold on KuCoin. SELL DEX reverses the legs.
 USDC/USDT use 1:1 simulation parity.
 
-Without route-specific gas evidence, records with usable quotes are
-indicative market candidates or balance misses. Verified gas input would
-require evidence bound to the pool snapshot, swap direction and gas units.
-The risk calculation uses the capped gas-price scenario and rounds the HBAR
-budget up to tinybars. Gas is valued at the fee-free 1,000 HBAR ask average
-from the same fresh book, rounded up to a simulated USDT micro-unit. The
-coordinator requires quoted net profit strictly above the floor and stresses
+Without valid gas inputs, records with usable quotes remain indicative
+market candidates or record the applicable data or balance failure. Gas
+evidence is associated with the market snapshot and swap direction. The
+risk calculation uses the capped gas budget. Both the estimate and budget
+are valued at the fee-free 1,000 HBAR ask average from the same fresh book,
+rounded up to a simulated USDT micro-unit. The coordinator requires quoted net profit strictly above the floor and stresses
 both legs adversely at the configured slippage limit for the maximum-loss
 test. It checks available virtual balances including the stressed buy amount
 and gas budget. Configuration can tighten the approved 0.10 USDT profit
@@ -133,14 +124,12 @@ reservations and execution use the P05 engine below.
 
 ## Persistent simulated execution
 
-Create `SimulationEngine.from_public(storage, config.simulation, public)` for
-normal operation. Initialize the database and seed virtual holdings as above.
-Call `await engine.recover()` before a worker begins analysis after restart.
-For an already-running worker, `await worker.analyze()` runs analysis and can
-admit a simulation within the same SQLite transaction. Call
-`await engine.recover()` to advance the admitted simulation. Worker lifecycle
-and scheduling remain the caller's responsibility. Recovery leaves persisted
-worker state alone.
+The foreground runtime creates the public simulation engine, recovers prior
+journal entries, and checks readiness before any worker can analyze a cycle.
+Analysis and virtual admission can share one SQLite transaction. After
+admission, recovery advances the persisted simulation. A standalone public
+engine can recover prior journal entries, subject to journal scope and
+provenance checks.
 
 The engine requires gas evidence bound to the exact public adapter snapshot
 for the requested route. When evidence is missing, expired or invalid, it
@@ -182,10 +171,10 @@ holds, together with any fill, fee, gas and corresponding ledger identifiers.
 not. Other rejection reasons remain in `analysis_cycles`. Query operational
 SQLite files only in private runtime storage.
 
-## Hedera route estimation
+## Hedera gas provenance
 
-The simulator models SaucerSwap V1 trades using its virtual WHBAR and USDC holdings. The unsigned estimation calls use `swapTokensForExactTokens` for an exact 1,000 WHBAR BUY and `swapExactTokensForTokens` for an exact 1,000 WHBAR SELL. Each includes the corresponding path, amount and slippage bound, recipient, deadline, and zero native value. The historical PDF’s payable `swapExactETHForTokens` follows a different entry point.
-
-Verified current estimates retain the provider, chain, bracketed head, unsigned call, raw gas units, price units and times in the persisted evaluation. Gross quotes are in the requested DEX quote. Net DEX quotes include estimated gas at the current RPC price and the fee-free valuation of fresh KuCoin HBAR depth under simulation parity. Risk admission applies the configured conservative gas price cap separately. The model estimates the execution gas component. Future fees can vary with actual gas used, price and other transaction charges.
-
-[Provider and calibration evidence](../project/evidence/ARB-P07.1-gas/verification.md)
+Evaluations record the configured units, gas limit, method, public price
+provider, chain, gas price, and price observation time. The report shows
+gross DEX quotes, DEX quotes adjusted by estimated gas, and the capped gas
+budget used in risk evaluation. The simulated journal debits modeled HBAR
+gas at the observed price according to the simulated execution outcome.

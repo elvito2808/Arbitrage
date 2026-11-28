@@ -406,6 +406,8 @@ def test_normal_public_engine_fails_closed_on_unknown_and_fixture_gas(offline, f
 
     public = RecordedPublic()
     engine = SimulationEngine.from_public(store, settings, public)
+    engine.gate = lambda *_: None
+    public.gas_down = not forgery
     if forgery:
         # Correctly authenticated synthetic metadata still has no trust in runtime.
         fixture.now = public.now

@@ -1,6 +1,6 @@
 # P08 deployment readiness and transfer
 
-The candidate is for Linux simulation. P08 authorizes preparation and disposable
+For the current owner installation paths, see [Ubuntu Server](INSTALL_SERVER.md) and [WSL 2](INSTALL_WSL.md). The P08 candidate is for Linux simulation. P08 authorizes preparation and disposable
 checks. Host provisioning, installation or activation of the systemd unit, and
 a sustained experiment require separate owner authorization.
 
@@ -54,8 +54,8 @@ quote expiry, private reporting and ledger reconciliation with controlled
 transports and disposable state.
 
 For static systemd verification, copy the example to a disposable directory
-as `arbitrage.service`. Substitute only the `ExecStart` executable path
-with the installed test executable and run `systemd-analyze verify` on the
+as `arbitrage.service`. Substitute the `ExecStart` interpreter and launcher paths
+with their disposable equivalents and run `systemd-analyze verify` on the
 copy. If system-mode verification requires unavailable runtime-directory access,
 use a disposable `XDG_RUNTIME_DIR` and `systemd-analyze --user --generators=no verify`
 for a limited parser check. Record the mode and result. This validates syntax

@@ -39,7 +39,7 @@ def test_installed_cli_commands_and_private_permissions(tmp_path, capsys, monkey
     assert cli.main([*args, "status"]) == 0
     assert '"worker-3": "stopped"' in capsys.readouterr().out
 
-    async def inspect(runtime, worker, config):
+    async def inspect(runtime, worker, config, *, log_level):
         assert runtime.status()["session"]["state"] == "running"
         assert runtime.status()["foreground_owner_present"]
         assert worker == "worker-2"
@@ -92,7 +92,7 @@ def test_foreground_lock_fences_another_process_and_pause_race(operations):
         }
     with runtime.owner():
         assert runtime.activate("resume", None, config)[0] == "worker-1"
-        assert sum(value == "running" for value in runtime.status()["workers"].values()) == 1
+        assert runtime.status()["workers"]["worker-1"] == "stopped"
 
 
 def test_unexpected_exit_freezes_config_and_records_abandoned_cycle(operations):
@@ -165,6 +165,11 @@ def test_running_cycle_cancelled_and_transport_closed(
 ):
     original, config, clock = operations
 
+    async def preflight(*args):
+        return None
+
+    monkeypatch.setattr(Runtime, "_preflight_market", preflight)
+
     async def run():
         observed = asyncio.Event()
         cancelled = asyncio.Event()
@@ -183,6 +188,8 @@ def test_running_cycle_cancelled_and_transport_closed(
         async def sleep(seconds):
             try:
                 await asyncio.sleep(0)
+                if seconds == MIN_INTERVAL.total_seconds():
+                    clock[0] += MIN_INTERVAL
                 if not observed.is_set():
                     return
                 if control == "deadline":
@@ -220,12 +227,21 @@ def test_running_cycle_cancelled_and_transport_closed(
 def test_deadline_cancels_cycle_interval_sleep(operations, monkeypatch, kucoin_offline):
     original, config, clock = operations
 
+    async def preflight(*args):
+        return None
+
+    monkeypatch.setattr(Runtime, "_preflight_market", preflight)
+    initial = clock[0]
+
     async def run():
         sleeping = asyncio.Event()
         cancelled = asyncio.Event()
 
         async def sleep(seconds):
             if seconds == MIN_INTERVAL.total_seconds():
+                if clock[0] == initial:
+                    clock[0] += MIN_INTERVAL
+                    return
                 sleeping.set()
                 try:
                     await asyncio.Future()
@@ -254,6 +270,7 @@ def test_actual_p03_adapters_and_production_engine_unknown_gas(operations, monke
     original, config, clock = operations
     clock[0] = POOL_TIME + timedelta(seconds=1)
     hedera, exchange = Hedera(), Exchange()
+    hedera.gas_down = True
     exchange.depth["time"] = int(POOL_TIME.timestamp() * 1000)
     monkeypatch.setattr(PublicConnections, "rpc", lambda self, *args: hedera.rpc(*args))
     monkeypatch.setattr(PublicConnections, "mirror_block", lambda self, *args: hedera.mirror_block(*args))
@@ -278,16 +295,15 @@ def test_actual_p03_adapters_and_production_engine_unknown_gas(operations, monke
 
     asyncio.run(run())
     assert state(original.storage) == before
-    with original.storage.transaction() as tx:
-        payload, = tx._db.execute("SELECT payload FROM analysis_cycles").fetchone()
-        assert [row["reason"] for row in json.loads(payload)["evaluations"]] == ["gas_unknown"] * 2
+    assert original.status()["analysis_cycles"] == 0
     health = original.status()["health"]
     assert health["ws"] == "idle"
     assert health["kucoin_source"] == "rest"
     assert any(event.get("source") == "rest" for event in health["recent_events"])
-    assert health["snapshots"]["dex"]["source_at"].endswith("+00:00")
-    assert any(event["event"] == "analysis" and event["worker"] == "worker-1"
-               and len(event["cycle"]) == 32 for event in health["recent_events"])
+    events = health["recent_events"]
+    assert any(event.get("state") == "WAITING_RETRY"
+               and event.get("diagnostic") == "gas_price_unavailable" for event in events)
+    assert all(event["event"] != "analysis" for event in events)
 
 
 def test_log_bounds_and_redaction():
@@ -381,10 +397,10 @@ def test_systemd_template_is_inert_and_recovery_only():
     repository = Path(__file__).resolve().parents[1]
     template = repository / "deploy" / "templates" / "arbitrage.service.example"
     text = template.read_text()
-    assert "NOT DEPLOYED" in text
-    assert "--data-dir /var/lib/arbitrage recover" in text
+    assert "[Install]" not in text
+    assert "/deploy/managed.py /var/lib/arbitrage recover" in text
     assert "User=arbitrage" in text and "StateDirectoryMode=0700" in text
-    assert "TimeoutStopSec=20s" in text and "Restart=on-failure" in text
+    assert "TimeoutStopSec=30s" in text and "Restart=on-abnormal" in text and "StartLimitBurst=3" in text
     assert "StandardOutput=journal" in text and not template.with_suffix("").exists()
 
 

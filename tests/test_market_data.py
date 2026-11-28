@@ -26,6 +26,7 @@ def abi(*values):
 
 class Hedera:
     def __init__(self):
+        self.source = POOL_TIME
         self.now = POOL_TIME + timedelta(seconds=1)
         self.chain = "0x127"
         self.reverse = False
@@ -42,7 +43,7 @@ class Hedera:
     async def mirror_block(self, number):
         assert number == BLOCK
         return {"number": number, "hash": self.mirror_hash + "cd" * 16,
-                "timestamp": {"to": f"{int(POOL_TIME.timestamp())}.617000001"}}
+                "timestamp": {"to": f"{int(self.source.timestamp())}.617000001"}}
 
     async def rpc(self, method, *params):
         if self.down:
@@ -50,7 +51,7 @@ class Hedera:
         if method == "eth_chainId":
             return self.chain
         if method == "eth_getBlockByNumber":
-            return {"number": hex(BLOCK), "hash": self.rpc_hash, "timestamp": hex(int(POOL_TIME.timestamp()))}
+            return {"number": hex(BLOCK), "hash": self.rpc_hash, "timestamp": hex(int(self.source.timestamp()))}
         if method == "eth_gasPrice":
             if self.gas_down:
                 raise Unavailable("fixture gas unavailable")
@@ -99,10 +100,10 @@ def test_historical_dex_integer_router_and_gas():
     for side, gas in zip((Side.BUY, Side.SELL), snapshot.gas, strict=True):
         assert gas.side == side
         assert gas.price_range_weibars == (1_630_000_000_000, 3_260_000_000_000)
-        assert gas.route_evidence is None
-        assert gas.estimation_error == "estimate_sender_unconfigured"
+        assert gas.route_evidence.configured.configured_gas_units == 109_478
+        assert gas.estimation_error is None
         assert HISTORICAL_GAS.calculated_gas_tinybars == HISTORICAL_GAS.charged_gas_tinybars == 22_762_599
-        assert gas.execution_gas is None and not gas.cost_valid
+        assert gas.execution_gas == 109_478 and gas.cost_valid
         assert replace(gas, execution_gas=250_000).cost_valid
         assert not GasEstimate(side, None, None, execution_gas=250_000).cost_valid
 
