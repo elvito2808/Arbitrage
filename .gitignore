@@ -13,3 +13,6 @@ dist/
 *.sqlite3-*
 *.log
 .env
+
+# WSL checkout launcher
+/arbitrage-ctl

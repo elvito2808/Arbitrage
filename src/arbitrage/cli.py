@@ -52,6 +52,8 @@ def parser():
     start = commands.add_parser("start", help="start a new analysis session in the foreground")
     start.add_argument("--worker", choices=WORKERS, default=WORKERS[0])
     resume = commands.add_parser("resume", help="resume the paused session in the foreground")
+    for command in (start, resume):
+        command.add_argument("--prepare-only", action="store_true", help=argparse.SUPPRESS)
     recover = commands.add_parser("recover", help="reattach in the foreground after untimely process exit")
     for foreground_command in (start, resume, recover):
         foreground_command.add_argument("--log-level", choices=tuple(level.value.upper() for level in Level), default="INFO")
@@ -97,8 +99,14 @@ def main(argv=None):
         elif command in ("start", "resume", "recover"):
             with runtime.owner():
                 config = None if command == "recover" else load_config(config_path)
+                if command == "start":
+                    status = runtime.status()
+                    if status["session"] and status["session"]["state"] in ("running", "paused"):
+                        raise ValueError("a session already exists, use pause, resume, recover or stop")
                 activation = runtime.activate(command, getattr(args, "worker", None), config)
-                if activation:
+                if activation and getattr(args, "prepare_only", False):
+                    print("Simulation session prepared.")
+                elif activation:
                     asyncio.run(foreground(runtime, *activation, log_level=Level(args.log_level.lower())))
                 elif command == "resume":
                     raise ValueError("there is no resumable session")
