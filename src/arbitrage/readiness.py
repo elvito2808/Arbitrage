@@ -22,7 +22,6 @@ class Check(StrEnum):
     WEBSOCKET = "kucoin_websocket"
     REST = "kucoin_rest"
     SNAPSHOTS = "snapshots"
-    SENDER = "sender"
     BUY_GAS = "buy_gas"
     SELL_GAS = "sell_gas"
     BALANCES = "balances"
@@ -61,13 +60,6 @@ class Diagnostic(StrEnum):
     BLOCK_PROVENANCE_MISMATCH = "route_estimate_head_changed"
     INSUFFICIENT_VIRTUAL_BALANCE = "insufficient_virtual_balance"
 
-
-CRITICAL_GAS = frozenset({
-    Diagnostic.SENDER_UNCONFIGURED, Diagnostic.SENDER_ACCOUNT_NOT_FOUND,
-    Diagnostic.MISSING_TOKEN_ASSOCIATION, Diagnostic.INSUFFICIENT_SENDER_WHBAR,
-    Diagnostic.INSUFFICIENT_SENDER_USDC, Diagnostic.INSUFFICIENT_SENDER_HBAR,
-    Diagnostic.INSUFFICIENT_ALLOWANCE,
-})
 
 
 class StartupBlocked(ValueError):

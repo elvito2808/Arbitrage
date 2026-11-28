@@ -56,8 +56,6 @@ class Hedera:
             if self.gas_down:
                 raise Unavailable("fixture gas unavailable")
             return hex(1_630_000_000_000)
-        if method == "eth_estimateGas":
-            raise Unavailable("fixture has no route estimate")
         assert method == "eth_call"
         call, at = params
         assert at == hex(BLOCK)
@@ -102,10 +100,10 @@ def test_historical_dex_integer_router_and_gas():
     for side, gas in zip((Side.BUY, Side.SELL), snapshot.gas, strict=True):
         assert gas.side == side
         assert gas.price_range_weibars == (1_630_000_000_000, 3_260_000_000_000)
-        assert gas.route_evidence is None
-        assert gas.estimation_error == "estimate_sender_unconfigured"
+        assert gas.route_evidence.configured.configured_gas_units == 109_478
+        assert gas.estimation_error is None
         assert HISTORICAL_GAS.calculated_gas_tinybars == HISTORICAL_GAS.charged_gas_tinybars == 22_762_599
-        assert gas.execution_gas is None and not gas.cost_valid
+        assert gas.execution_gas == 109_478 and gas.cost_valid
         assert replace(gas, execution_gas=250_000).cost_valid
         assert not GasEstimate(side, None, None, execution_gas=250_000).cost_valid
 

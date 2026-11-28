@@ -20,21 +20,19 @@ PUBLIC_RPC = PublicConnections.rpc
 
 
 @pytest.fixture
-def startup(tmp_path, monkeypatch, funded_sender):
+def startup(tmp_path, monkeypatch):
     class Replay(Hedera, Exchange):
         def __init__(self):
             Hedera.__init__(self)
             Exchange.__init__(self)
             self.depth.update(asks=[["0.05280", "2000"]], bids=[["0.05270", "2000"]])
             self.chain_calls = 0
-            self.reject = None
-            self.head_advances = False
+            self.invalid_price = False
             self.rest_down = False
             self.timeout_attempts = set()
             self.rate_limit = False
-            self.estimates = []
+            self.gas_price_reads = 0
             self.reads = []
-            self.sender_mode = None
 
         async def rpc(self, method, *params):
             if method == "eth_chainId":
@@ -44,17 +42,10 @@ def startup(tmp_path, monkeypatch, funded_sender):
                     raise TimeoutError
                 if self.rate_limit:
                     raise ProviderRateLimited("fixture 429")
-            if method == "eth_estimateGas":
-                selector = params[0]["data"][:10]
-                assert params[0]["from"] == config.simulation.hedera_estimate_sender
-                assert params[0]["value"] == "0x0" and params[1] == "latest"
-                self.estimates.append(selector)
-                if selector == self.reject:
+            if method == "eth_gasPrice":
+                self.gas_price_reads += 1
+                if self.invalid_price:
                     return "0x0"
-                return hex(150_000)
-            if method == "eth_getBlockByNumber" and self.head_advances and len(self.estimates) == 2:
-                self.head_advances = False
-                return {"number": "0x1", "hash": self.rpc_hash}
             return await super().rpc(method, *params)
 
         async def kucoin(self, resource):
@@ -68,20 +59,6 @@ def startup(tmp_path, monkeypatch, funded_sender):
                 self.depth["sequence"] = str(int(self.source.timestamp()))
             return await Exchange.kucoin(self, resource)
 
-        async def sender(self, address, router):
-            account, tokens, allowances = funded_sender(address, router)
-            if self.sender_mode == "missing":
-                tokens["tokens"].clear()
-                allowances["allowances"].clear()
-            if self.sender_mode == "hbar":
-                account["balance"]["balance"] = 0
-            if self.sender_mode == "allowance":
-                allowances["allowances"].clear()
-            if self.sender_mode == "empty":
-                tokens["tokens"][0]["balance"] = tokens["tokens"][1]["balance"] = 0
-                allowances["allowances"].clear()
-            return account, tokens, allowances
-
     config = load_config(CONFIG)
     replay = Replay()
     def forbid_network(*args, **kwargs):
@@ -91,7 +68,6 @@ def startup(tmp_path, monkeypatch, funded_sender):
     monkeypatch.setattr(PublicConnections, "rpc", lambda _, *args: replay.rpc(*args))
     monkeypatch.setattr(PublicConnections, "kucoin", lambda _, *args: replay.kucoin(*args))
     monkeypatch.setattr(PublicConnections, "mirror_block", lambda _, *args: replay.mirror_block(*args))
-    monkeypatch.setattr(PublicConnections, "mirror_sender", lambda _, *args: replay.sender(*args))
     return replay, config, tmp_path
 
 
@@ -166,32 +142,25 @@ def test_srg_t02_timeout_then_success(startup):
     assert db_count(runtime, "simulated_trades") == 0
 
 
-@pytest.mark.parametrize("failure", ["sender", "chain", "ledger", "missing", "empty", "hbar", "allowance"])
+@pytest.mark.parametrize("failure", ["chain", "ledger"])
 def test_srg_t03_critical_without_retry(startup, failure):
     replay, config, directory = startup
     hook = None
-    expected = {
-        "sender": "estimate_sender_unconfigured", "chain": "market_identity_mismatch",
-        "ledger": "storage_inconsistent", "missing": "missing_token_association",
-        "empty": "insufficient_sender_usdc", "hbar": "insufficient_sender_hbar",
-        "allowance": "insufficient_allowance",
-    }[failure]
-    if failure == "sender":
-        config = config.model_copy(update={"simulation": config.simulation.model_copy(
-            update={"hedera_estimate_sender": None},
-        )})
-    elif failure == "chain":
+    if failure == "chain":
         replay.chain = "0x128"
-    elif failure == "ledger":
+        expected = "market_identity_mismatch"
+    else:
+        expected = "storage_inconsistent"
         def corrupt(runtime):
             with runtime.storage.transaction() as tx:
                 tx._db.execute("UPDATE balances SET total_units=total_units+1 WHERE holding=?",
                                (Holding.DEX_HBAR,))
         hook = corrupt
-    else:
-        replay.sender_mode = failure
     runtime, _ = drive((replay, config, directory), blocked=expected, retries=0, hook=hook)
     assert db_count(runtime, "analysis_cycles") == db_count(runtime, "simulated_trades") == 0
+    if failure == "chain":
+        check = runtime.status()["readiness"]["checks"]["hedera"]
+        assert (check["outcome"], check["reason"], bool(check["at"])) == ("FAIL", expected, True)
     with runtime.owner(), pytest.raises(StartupBlocked):
         runtime.activate("recover", None)
 
@@ -207,20 +176,19 @@ def test_srg_t04_websocket_fallback(startup, rest_available):
     assert db_count(runtime, "analysis_cycles") == int(rest_available)
 
 
-@pytest.mark.parametrize("selector", ["0x8803dbee", "0x38ed1739", None])
-def test_srg_t05_each_gas_route_and_head(startup, selector):
-    startup[0].reject = selector
-    startup[0].head_advances = selector is None
-    if selector is None:
-        runtime, waits = drive(startup, retries=1)
-        assert waits[0][1:] == ("WAITING_RETRY", 0)
-        assert any(event.get("diagnostic") == "route_estimate_head_changed"
-                   for event in runtime.status()["health"]["recent_events"])
-    else:
-        runtime, _ = drive(startup, blocked="route_estimate_invalid", retries=3)
-        assert db_count(runtime, "analysis_cycles") == 0
-        key = "buy_gas" if selector == "0x8803dbee" else "sell_gas"
-        assert runtime.status()["readiness"]["checks"][key]["outcome"] == "UNKNOWN"
+@pytest.mark.parametrize(("field", "diagnostic"), [
+    ("invalid_price", "gas_price_invalid"), ("gas_down", "gas_price_unavailable"),
+])
+def test_srg_t05_bad_gas_price_blocks_both_directions(startup, field, diagnostic):
+    setattr(startup[0], field, True)
+    def check_wait(runtime, status):
+        assert status["workers"]["worker-1"] != "running"
+    runtime, _ = drive(startup, blocked=diagnostic, retries=3, on_wait=check_wait)
+    status = runtime.status()
+    assert status["workers"]["worker-1"] != "running"
+    assert db_count(runtime, "analysis_cycles") == db_count(runtime, "reservations") == 0
+    for key in ("buy_gas", "sell_gas"):
+        assert status["readiness"]["checks"][key]["reason"] == diagnostic
 
 
 @pytest.mark.parametrize("deadline", [False, True])
@@ -341,6 +309,7 @@ def test_srg_t08_manual_review_retains_accepted_reservations(startup):
             runtime.activate("start", "worker-1", config)
         engine = SimulationEngine.from_public(runtime.storage, config.simulation,
                                               PublicConnections(None, clock=runtime.now))
+        engine.gate = lambda *_: None
         # Use the same adapters with a deterministic public-read fixture.
         async def admit():
             return await engine.worker("worker-1").analyze()
@@ -366,7 +335,7 @@ def test_srg_t09_valid_unprofitable_market_and_running_outage(startup, running_f
             if running_failure == "timeout":
                 startup[0].timeout_attempts = {3}
             else:
-                startup[0].reject = "0x38ed1739"
+                startup[0].invalid_price = True
         elif status["analysis_cycles"] == 2:
             runtime.control("stopped")
     runtime, _ = drive(startup, on_wait=control)
@@ -377,7 +346,8 @@ def test_srg_t09_valid_unprofitable_market_and_running_outage(startup, running_f
 
 def test_srg_t10_public_read_allowlist(startup):
     runtime, _ = drive(startup)
-    assert startup[0].estimates == ["0x8803dbee", "0x38ed1739"] * 2
+    assert startup[0].gas_price_reads == 2
+    assert startup[1].simulation.hedera_estimate_sender is None
     assert db_count(runtime, "simulated_trades") == db_count(runtime, "ledger") == 0
     public = PublicConnections(None)
     for method in ("eth_sendRawTransaction", "eth_sendTransaction", "eth_sign", "personal_sign"):

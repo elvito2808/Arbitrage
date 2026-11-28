@@ -21,7 +21,7 @@ from .models import (
     normalize_time,
 )
 from .saucerswap import (
-    WEIBARS_PER_TINYBAR, GasEstimate, PoolSnapshot, RouteGasEvidence, SaucerSwap, amounts, gas_cost_tinybars,
+    GasEstimate, PoolSnapshot, RouteGasEvidence, SaucerSwap, amounts, gas_cost_tinybars,
 )
 from .storage import Storage, Transaction
 
@@ -86,10 +86,7 @@ class OpportunityCoordinator:
     ) -> "OpportunityCoordinator":
         age = timedelta(seconds=settings.cache_ttl_seconds)
         return cls(
-            storage, settings, SaucerSwap(
-                public, age, estimate_sender=settings.hedera_estimate_sender,
-                slippage=min(Fraction("0.005"), Fraction(settings.slippage_fraction)),
-            ),
+            storage, settings, SaucerSwap(public, age, settings=settings),
             KuCoin(public, fee=settings.cex_fee_fraction, cache_age=age), clock=public.clock,
         )
 
@@ -225,7 +222,18 @@ class OpportunityCoordinator:
             raise InvalidCycle(Reason.GAS_INVALID) from None
         if observed < market.pool.received_at:
             raise InvalidCycle(Reason.GAS_INVALID)
-        if evidence.rpc is not None:
+        if evidence.configured is not None:
+            basis = evidence.configured
+            if (
+                evidence.rpc is not None or not isinstance(self.dex, SaucerSwap)
+                or not self.dex.verifies_route_gas(gas, market.pool)
+                or not market.pool.router_verified
+                or basis.configured_gas_units != gas.execution_gas
+                or basis.price_observed_at != observed or prices != (basis.gas_price_weibars, 2 * basis.gas_price_weibars)
+            ):
+                raise InvalidCycle(Reason.GAS_INVALID)
+            budget = ceil(gas_cost_tinybars(gas.execution_gas, prices[0]) * self.gas_cap)
+        elif evidence.rpc is not None:
             if (
                 not isinstance(self.dex, SaucerSwap)
                 or not self.dex.verifies_route_gas(gas, market.pool)
@@ -235,8 +243,9 @@ class OpportunityCoordinator:
         elif gas.execution_gas in (34_133, 244_829):
             # Reject legacy measurements passed as unverified fixture evidence.
             raise InvalidCycle(Reason.GAS_INVALID)
-        capped_price = min(prices[1], int(prices[0] * self.gas_cap))
-        budget = gas_cost_tinybars(gas.execution_gas, capped_price)
+        if evidence.configured is None:
+            capped_price = min(prices[1], int(prices[0] * self.gas_cap))
+            budget = gas_cost_tinybars(gas.execution_gas, capped_price)
         if budget > MAX_UNITS:
             raise InvalidCycle(Reason.GAS_INVALID)
         return budget, self._gas_cost_usdc(budget, market), evidence.id
@@ -295,11 +304,12 @@ class OpportunityCoordinator:
             gas_budget_tinybars=budget,
         )
         rpc = gas.route_evidence.rpc
-        if rpc is not None:
-            estimate_tinybars = gas_cost_tinybars(rpc.estimated_gas, rpc.gas_price_weibars)
+        configured = gas.route_evidence.configured
+        if rpc is not None or configured is not None:
+            estimate_tinybars = gas_cost_tinybars(gas.execution_gas, gas.price_range_weibars[0])
             estimate_usdc = self._gas_cost_usdc(estimate_tinybars, market)
             fields.update(
-                gas_rpc=rpc,
+                gas_rpc=rpc, configured_gas=configured,
                 estimated_gas_hbar=Decimal(f"{estimate_tinybars}e-8"),
                 estimated_gas_usdc=usdt(estimate_usdc),
                 dex_net_quote_usdc=usdt(dex.quote_units + estimate_usdc if buy_dex else dex.quote_units - estimate_usdc),
@@ -353,9 +363,13 @@ class OpportunityCoordinator:
                 self._timing(market.pool, market.book, now)
             except InvalidCycle as error:
                 reason = error.reason
+        admission_blocked = None
         if reason is None and self.market_gate:
             reason = self.market_gate(tx, market, now)
-        if reason is None:
+            if reason in (Reason.GAS_INVALID, Reason.GAS_UNKNOWN):
+                admission_blocked = reason
+                reason = None
+        if reason is None and admission_blocked is None:
             ids = self._snapshot_ids(market)
             if any(tx.seen_snapshot(NETWORK, key) for key in ids):
                 reason = Reason.DUPLICATE_SNAPSHOT
@@ -368,8 +382,11 @@ class OpportunityCoordinator:
                 dex_snapshot=observations[0], cex_snapshot=observations[1],
                 evaluations=tuple(self._evaluate(tx, direction, market, now) for direction in Direction),
             )
-            tx.add_analysis(NETWORK, result, ids)
-            self._after_analysis(tx, result, market, now)
+            tx.add_analysis(NETWORK, result, ids if admission_blocked is None else ())
+            if admission_blocked is None:
+                self._after_analysis(tx, result, market, now)
+            elif any(item.status == EvaluationStatus.ELIGIBLE for item in result.evaluations):
+                tx.simulation_miss(cycle_id, admission_blocked)
         tx.release_analysis(NETWORK, cycle_id, now)
         return result
 
@@ -389,6 +406,8 @@ class OpportunityCoordinator:
         with self.storage.transaction() as tx:
             now = self._now()
             denied = self.gate(tx, worker_id, now) if self.gate else None
+            if denied == Reason.READINESS_BLOCKED:
+                return self._miss(cycle_id, worker_id, now, denied, session_id=self.session_id)
             if denied is None:
                 denied = tx.claim_analysis(NETWORK, cycle_id, worker_id, now, LEASE, MIN_INTERVAL)
             if denied:

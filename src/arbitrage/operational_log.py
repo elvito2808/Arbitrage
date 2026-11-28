@@ -8,7 +8,7 @@ from decimal import Decimal
 from queue import Empty, Full, Queue
 
 
-from .models import Direction, EvaluationStatus, Holding, Reason, Venue
+from .models import GAS_SOURCE, Direction, EvaluationStatus, Holding, Reason, Venue
 from .readiness import Check, Diagnostic, Outcome, ReadinessState
 
 
@@ -41,11 +41,13 @@ class Level(StrEnum):
 
 NUMBERS = {
     Event.CONFIGURATION: ("capacity", "active_limit", "chain_id", "trade_hbar", "profit_usdt", "loss_usdt",
-                          "slippage", "fee", "gas_cap", "ttl_seconds", "interval_seconds"),
+                          "slippage", "fee", "gas_cap", "ttl_seconds", "interval_seconds",
+                          "buy_gas_units", "sell_gas_units", "gas_limit"),
     Event.ANALYSIS_START: ("number",),
     Event.ANALYSIS: ("number", "duration_ms"),
     Event.EVALUATION: ("number", "trade_hbar", "dex_usdc", "cex_usdt", "gas_observed_hbar",
-                       "gas_observed_usdt", "gas_capped_hbar", "gas_capped_usdt", "indicative_usdt",
+                       "gas_observed_usdt", "gas_estimated_hbar", "gas_estimated_usdt", "gas_price_weibars",
+                       "gas_capped_hbar", "gas_capped_usdt", "indicative_usdt",
                        "net_usdt", "stressed_usdt"),
     Event.SIMULATED_EXECUTION: ("attempt", "filled_hbar", "fill_usdc", "fill_usdt", "fee_usdt", "gas_hbar",
                                 "trade_hbar", "net_usdt", "stressed_usdt", *Holding),
@@ -53,12 +55,12 @@ NUMBERS = {
     Event.SESSION_SUMMARY: ("cycles", "admissions", "filled", "failed", "incomplete", "manual_review",
                             "active", "cycle_errors", "console_drops"),
     Event.READINESS_STATE: ("delay_seconds",),
-    Event.READINESS_CHECK: ("chain_id", "router_number", "gas_units", "capped_tinybars", "hbar_tinybars",
-                            "usdc_balance", "usdc_allowance", "whbar_balance", "whbar_allowance"),
+    Event.READINESS_CHECK: ("chain_id", "router_number", "gas_units", "gas_price_weibars", "capped_tinybars",
+                            "estimated_gas_hbar", "maximum_gas_hbar"),
     Event.NETWORK_SAMPLE: ("http_retries", "cache_hits"),
 }
 ENUMS = {
-    Event.EVALUATION: {"direction": tuple(Direction), "status": tuple(EvaluationStatus), "reason": tuple(Reason),
+    Event.EVALUATION: {"gas_method": (GAS_SOURCE,), "direction": tuple(Direction), "status": tuple(EvaluationStatus), "reason": tuple(Reason),
                        "source": ("websocket", "rest"), "dex_side": ("buy", "sell"), "cex_side": ("buy", "sell"),
                        "admission": ("admitted", "declined", "not_eligible"),
                        "guard": (*Reason, "unresolved_network_execution", "cycle_fence_lost",
@@ -72,9 +74,9 @@ ENUMS = {
     Event.LIFECYCLE: {"intent": ("paused", "stopped", "expired", "emergency", "shutdown", "running",
                                 "startup_blocked", "interrupted")},
     Event.ANALYSIS: {"result": ("admitted", "not_admitted"), "source": ("websocket", "rest")},
-    Event.READINESS_CHECK: {"source": ("websocket", "rest"), "pair": ("WHBAR-USDC",),
+    Event.READINESS_CHECK: {"gas_method": (GAS_SOURCE,), "source": ("websocket", "rest"), "pair": ("WHBAR-USDC",),
                             "rpc": ("PASS",), "mirror": ("PASS",)},
-    Event.CONFIGURATION: {"network": ("hedera:295",), "market": ("HBAR-USDT",),
+    Event.CONFIGURATION: {"gas_method": (GAS_SOURCE,), "network": ("hedera:295",), "market": ("HBAR-USDT",),
                           "dex_market": ("WHBAR-USDC",), "mode": ("simulation",)},
 }
 
@@ -120,9 +122,6 @@ class OperationalLog:
             elif key in details and value is None:
                 record[key] = None
         if event is Event.READINESS_CHECK:
-            for key in ("usdc_associated", "whbar_associated"):
-                if type(details.get(key)) is bool:
-                    record[key] = details[key]
             if type(pool := details.get("pool")) is str and re.fullmatch(r"0x[0-9a-f]{40}", pool):
                 record["pool"] = pool
         if event is Event.SIMULATED_EXECUTION:

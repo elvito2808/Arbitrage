@@ -6,10 +6,10 @@ from decimal import Decimal
 
 from .coordinator import MIN_INTERVAL, NETWORK
 from .kucoin import SYMBOL
-from .models import Balance, EvaluationStatus, Holding, Venue
+from .models import GAS_SOURCE, Balance, EvaluationStatus, Holding, Venue
 from .operational_log import Event, Level
 from .saucerswap import CHAIN_ID
-from .simulation import Event as JournalEvent, Request
+from .simulation import Effect, Event as JournalEvent, Request
 
 
 def units(value, decimals):
@@ -44,7 +44,8 @@ class Monitor:
                   trade_hbar=s.trade_hbar, profit_usdt=exact(engine.profit_floor), loss_usdt=exact(engine.loss_limit),
                   slippage=exact(engine.slippage), fee=exact(engine.fee), gas_cap=exact(engine.gas_cap),
                   ttl_seconds=s.cache_ttl_seconds, interval_seconds=int(MIN_INTERVAL.total_seconds()),
-                  deadline=datetime.fromisoformat(row["deadline"]), parity=s.usdc_usdt_parity)
+                  gas_method=GAS_SOURCE, buy_gas_units=s.buy_gas_units, sell_gas_units=s.sell_gas_units,
+                  gas_limit=s.gas_limit, deadline=datetime.fromisoformat(row["deadline"]), parity=s.usdc_usdt_parity)
 
     def opening(self):
         with self.runtime.storage.observe() as tx:
@@ -75,12 +76,15 @@ class Monitor:
         source = book.transport if book else None
         for item in cycle.evaluations:
             dex, cex = item.requested_dex, item.requested_cex
+            basis = item.configured_gas
             self.emit(Event.EVALUATION, cycle=cycle.id, number=self.number, direction=item.direction,
                       status=item.status, reason=item.reason, source=source,
                       trade_hbar=units((dex or cex).base_units, 8) if (dex or cex) else None,
                       dex_side=dex.side.value if dex else None, dex_usdc=units(dex.quote_units, 6) if dex else None,
                       cex_side=cex.side.value if cex else None, cex_usdt=units(cex.quote_units, 6) if cex else None,
-                      gas_observed_hbar=item.estimated_gas_hbar, gas_observed_usdt=item.estimated_gas_usdc,
+                      gas_method=basis.source if basis else None,
+                      gas_price_weibars=basis.gas_price_weibars if basis else None,
+                      gas_estimated_hbar=item.estimated_gas_hbar, gas_estimated_usdt=item.estimated_gas_usdc,
                       gas_capped_hbar=units(item.gas_budget_tinybars, 8), gas_capped_usdt=item.gas_cost_usdt,
                       indicative_usdt=item.indicative_profit_usdt, net_usdt=item.net_profit_usdt,
                       stressed_usdt=item.stressed_profit_usdt,
@@ -135,14 +139,15 @@ class Monitor:
         for event in events:
             event_holds = {hold.holding: hold.units for hold in event.remaining or ()}
             fill = event.fill
+            known = event.outcome is not None and event.outcome != Effect.UNKNOWN
             self.emit(Event.SIMULATED_EXECUTION, cycle=execution, execution=execution,
                       phase="attempt" if event.due_at else "result" if event.outcome else "review",
                       recorded_at=event.at, venue=event.venue, attempt=event.attempt or None, result=event.outcome.value if event.outcome else None,
                       filled_hbar=units(fill.base_units, 8) if fill else None,
                       fill_usdc=units(fill.quote_units, 6) if fill and fill.venue == Venue.DEX else None,
                       fill_usdt=units(fill.quote_units, 6) if fill and fill.venue == Venue.CEX else None,
-                      fee_usdt=units(event.fee_units, 6) if event.venue == Venue.CEX and event.outcome else None,
-                      gas_hbar=units(event.gas_units, 8) if event.venue == Venue.DEX and event.outcome else None,
+                      fee_usdt=units(event.fee_units, 6) if event.venue == Venue.CEX and known else None,
+                      gas_hbar=units(event.gas_units, 8) if event.venue == Venue.DEX and known else None,
                       **self.holds(event.remaining))
             for entry in event.ledger:
                 holding = entry.holding

@@ -53,25 +53,12 @@ class ReplaySession:
         if url == "https://mainnet.hashio.io/api":
             assert method == "POST"
             body = {"jsonrpc": "2.0", "id": json["id"]}
-            if json["method"] == "eth_estimateGas":
-                assert json["params"][0]["from"] == "0x0000000000000000000000000000000000a76192"
-                body["error"] = {"code": 3, "message": "execution reverted: Safe token transfer failed!, TOKEN_NOT_ASSOCIATED_TO_ACCOUNT"}
-            else:
-                assert json["method"] in {"eth_chainId", "eth_getBlockByNumber", "eth_call", "eth_gasPrice"}
-                body["result"] = await self.hedera.rpc(json["method"], *json["params"])
+            assert json["method"] in {"eth_chainId", "eth_getBlockByNumber", "eth_call", "eth_gasPrice"}
+            body["result"] = ("0x0" if json["method"] == "eth_gasPrice" and self.hedera.gas_down
+                              else await self.hedera.rpc(json["method"], *json["params"]))
         elif url == "https://api.kucoin.com/api/v1/bullet-public":
             assert method == "POST"
             body = {"code": "400100", "data": {}}
-        elif "/api/v1/accounts/" in url:
-            assert method == "GET"
-            sender = "0x0000000000000000000000000000000000a76192"
-            assert f"/accounts/{sender}" in url
-            if "/tokens?" in url:
-                key = "allowances" if "/allowances/" in url else "tokens"
-                body = {key: [], "links": {"next": None}}
-            else:
-                body = {"account": "0.0.10969490", "evm_address": sender,
-                        "deleted": False, "balance": {"balance": 0}}
         elif url.startswith("https://mainnet-public.mirrornode.hedera.com/api/v1/blocks/"):
             assert method == "GET"
             body = await self.hedera.mirror_block(int(url.rsplit("/", 1)[1]))
@@ -107,9 +94,19 @@ def test_recorded_shapes_through_foreground_and_cli(tmp_path, monkeypatch):
     args = ["--data-dir", str(data)]
     assert cli.main([*args, "init", "--config", str(CONFIG)]) == 0
     session = ReplaySession()
+    session.hedera.gas_down = True
     monkeypatch.setattr("arbitrage.runtime.aiohttp.ClientSession", lambda **options: session)
     now = POOL_TIME + timedelta(seconds=1)
-    runtime = Runtime(data, clock=lambda: now)
+    async def advance(delay):
+        nonlocal now
+        if delay == 0.25:
+            await asyncio.Future()
+        now += timedelta(seconds=delay)
+        session.hedera.source = now - timedelta(seconds=1)
+        session.exchange.depth["time"] = int(session.hedera.source.timestamp() * 1000)
+        await asyncio.sleep(0)
+
+    runtime = Runtime(data, clock=lambda: now, sleep=advance, jitter=lambda *_: 0)
     config = load_config(CONFIG)
 
     def balances():
@@ -123,9 +120,9 @@ def test_recorded_shapes_through_foreground_and_cli(tmp_path, monkeypatch):
             asyncio.run(runtime.run(*activation, asyncio.Event()))
         readiness = runtime.status()["readiness"]
         assert readiness["state"] == "STARTUP_BLOCKED"
-        assert readiness["reason"] == "missing_token_association"
-        assert readiness["checks"]["buy_gas"]["outcome"] == "FAIL"
-        assert readiness["checks"]["sell_gas"]["outcome"] == "FAIL"
+        assert readiness["reason"] == "gas_price_invalid"
+        assert readiness["checks"]["buy_gas"]["outcome"] == "UNKNOWN"
+        assert readiness["checks"]["sell_gas"]["outcome"] == "UNKNOWN"
         with pytest.raises(StartupBlocked):
             runtime.activate("recover", None)
     assert session.requests

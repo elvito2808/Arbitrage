@@ -3,7 +3,6 @@
 import asyncio
 import fcntl
 import json
-import re
 import signal
 import sqlite3
 import sys
@@ -29,8 +28,8 @@ from .market_data import (
 from .monitor import Monitor
 from .models import EXPERIMENT_DURATION, Holding, Reason, Side, Worker, WorkerState, normalize_time
 from .operational_log import Event, Level, OperationalLog
-from .readiness import CRITICAL_GAS, Check, Diagnostic, Outcome, ReadinessState, StartupBlocked
-from .saucerswap import CHAIN_ID, PAIR, ROUTER, USDC, WHBAR
+from .readiness import Check, Diagnostic, Outcome, ReadinessState, StartupBlocked
+from .saucerswap import CHAIN_ID, PAIR, ROUTER, HederaIdentityError, gas_cost_tinybars
 from .simulation import MAX_ATTEMPTS, SimulationEngine
 from .storage import Storage
 
@@ -292,13 +291,17 @@ class Runtime:
             if unresolved:
                 unsettled = ("manual review required" if emergency or unresolved["status"] == "manual_review"
                              else "pending recovery")
+            workers = {worker: tx.worker(worker).state for worker in WORKERS}
+            if row and (not readiness or readiness["state"] != ReadinessState.RUNNING):
+                if workers.get(row["worker_id"]) == WorkerState.RUNNING:
+                    workers[row["worker_id"]] = WorkerState.STOPPED
             return {
                 "mode": "simulation", "session": session,
                 "foreground_owner_present": owner_present,
                 "emergency_latched": emergency,
                 "analysis_cycles": tx._db.execute("SELECT count(*) FROM analysis_cycles").fetchone()[0],
                 "simulated_trades": tx._db.execute("SELECT count(*) FROM simulated_trades").fetchone()[0],
-                "workers": {worker: tx.worker(worker).state for worker in WORKERS},
+                "workers": workers,
                 "unsettled": unsettled,
                 "execution_status": unresolved["status"] if unresolved else "idle",
                 "health": health or None,
@@ -366,15 +369,16 @@ class Runtime:
         }
         level = (Level.ERROR if outcome == Outcome.FAIL else
                  Level.WARNING if outcome == Outcome.DEGRADED else Level.INFO)
-        details = {key: evidence[key] for key in ("source", "gas_units", "capped_tinybars", "hbar_tinybars")
-                   if key in evidence}
+        details = {key: evidence[key] for key in (
+            "source", "gas_method", "gas_units", "gas_price_weibars", "capped_tinybars",
+            "estimated_gas_hbar", "maximum_gas_hbar",
+        ) if key in evidence}
         if check == Check.HEDERA and outcome == Outcome.PASS:
             details.update(chain_id=CHAIN_ID, router_number=int(ROUTER, 16),
                            pool=PAIR, pair="WHBAR-USDC", rpc="PASS", mirror="PASS")
-        if check == Check.SENDER:
-            for token, fields in evidence.get("tokens", {}).items():
-                details.update({f"{token}_associated": fields["associated"], f"{token}_balance": fields["balance_units"],
-                                f"{token}_allowance": fields["allowance_units"]})
+        for key in ("estimated_gas_hbar", "maximum_gas_hbar"):
+            if key in details:
+                details[key] = Decimal(details[key])
         self.log.emit(Event.READINESS_CHECK, level, worker=worker, session=self.session_id, check=check,
                       outcome=outcome, diagnostic=reason, attempt=self.readiness["attempt"], **details)
 
@@ -413,10 +417,6 @@ class Runtime:
         if not consistent:
             self._critical_cycle = Diagnostic.STORAGE_INCONSISTENT
             return Reason.READINESS_BLOCKED
-        for gas in market.pool.gas:
-            if gas.estimation_error in CRITICAL_GAS:
-                self._critical_cycle = Diagnostic(gas.estimation_error)
-                return Reason.READINESS_BLOCKED
         if len(market.pool.gas) != 2:
             return Reason.GAS_INVALID
         for side, gas in zip(Side, market.pool.gas, strict=True):
@@ -450,79 +450,7 @@ class Runtime:
             await self.sleep((due - now).total_seconds())
         return False
 
-    @staticmethod
-    def _sender_quantities(account, relationships, allowances, address):
-        router_id = f"0.0.{int(ROUTER, 16)}"
-        account_id = account.get("account")
-        if (account.get("evm_address") != address or account.get("deleted") is not False
-                or not isinstance(account_id, str) or not re.fullmatch(r"0\.0\.[1-9][0-9]*", account_id)):
-            raise MarketDataError("sender identity unverified")
-        if any(not isinstance(page.get("links"), dict) or page["links"].get("next") is not None
-               for page in (relationships, allowances)):
-            raise MarketDataError("sender relationships or allowances incomplete")
-        tokens = {item["token_id"]: item for item in relationships["tokens"]}
-        approvals = {item["token_id"]: item for item in allowances["allowances"]
-                     if item.get("spender") == router_id and item.get("owner") == account_id}
-        hbar = account["balance"]["balance"]
-        values = {}
-        for token_address in (USDC, WHBAR):
-            token = f"0.0.{int(token_address, 16)}"
-            relation = tokens.get(token)
-            values[token_address] = (relation is not None, relation["balance"] if relation else 0,
-                               approvals.get(token, {}).get("amount", 0))
-        if any(type(units) is not int or units < 0
-               for units in (hbar, *(amount for _, balance, approval in values.values()
-                                     for amount in (balance, approval)))):
-            raise MarketDataError("invalid sender balance or allowance")
-        return hbar, values
-
-    async def _sender_check(self, engine, public, worker, pool, budgets):
-        address = engine.dex.estimate_sender
-        try:
-            async with asyncio.timeout(5):
-                data = await public.mirror_sender(address, f"0.0.{int(ROUTER, 16)}")
-            hbar, amounts = self._sender_quantities(*data, address)
-        except (MarketDataError, TimeoutError, KeyError, TypeError, AttributeError, ExceptionGroup) as error:
-            if isinstance(error, ExceptionGroup):
-                engine._failure(error)
-            errors = error.exceptions if isinstance(error, ExceptionGroup) else (error,)
-            diagnostic = Diagnostic.SENDER_UNVERIFIED
-            if any(isinstance(item, (TimeoutError, ProviderTimeout)) for item in errors):
-                diagnostic = Diagnostic.PROVIDER_TIMEOUT
-            elif any(isinstance(item, ProviderRateLimited) for item in errors):
-                diagnostic = Diagnostic.PROVIDER_RATE_LIMITED
-            self._check(worker, Check.SENDER, Outcome.UNKNOWN, diagnostic)
-            return diagnostic, False
-
-        issues = []
-        tokens = {}
-        for token, name, required, shortfall in (
-            (USDC, "usdc", pool.quotes[0].quote_units, Diagnostic.INSUFFICIENT_SENDER_USDC),
-            (WHBAR, "whbar", pool.quotes[1].base_units, Diagnostic.INSUFFICIENT_SENDER_WHBAR),
-        ):
-            associated, balance, allowance = amounts[token]
-            tokens[name] = {"associated": associated, "balance_units": balance,
-                            "allowance_units": allowance, "required_units": required}
-            if not associated:
-                issues.append(Diagnostic.MISSING_TOKEN_ASSOCIATION)
-            if balance < required:
-                issues.append(shortfall)
-            if allowance < required:
-                issues.append(Diagnostic.INSUFFICIENT_ALLOWANCE)
-        required_hbar = max(budgets.values()) if len(budgets) == 2 else None
-        if required_hbar is not None and hbar < required_hbar:
-            issues.append(Diagnostic.INSUFFICIENT_SENDER_HBAR)
-        issues = list(dict.fromkeys(issues))
-        if Diagnostic.MISSING_TOKEN_ASSOCIATION in issues:
-            reason = Diagnostic.MISSING_TOKEN_ASSOCIATION
-        else:
-            reason = issues[0] if issues else None
-        self._check(worker, Check.SENDER, Outcome.FAIL if reason else
-                    Outcome.PASS if required_hbar is not None else Outcome.UNKNOWN, reason,
-                    hbar_tinybars=hbar, required_hbar_tinybars=required_hbar, tokens=tokens, diagnostics=issues)
-        return (reason, True) if reason else None
-
-    async def _preflight_market(self, engine, public, worker):
+    async def _preflight_market(self, engine, worker):
         try:
             pool, book, completed = await engine._read()
             self._check(worker, Check.HEDERA, Outcome.PASS if pool.router_verified else Outcome.UNKNOWN)
@@ -546,6 +474,8 @@ class Runtime:
                     diagnostic = Diagnostic.PROVIDER_RATE_LIMITED
                 elif any(isinstance(item, (ProviderTimeout, TimeoutError)) for item in errors):
                     diagnostic = Diagnostic.PROVIDER_TIMEOUT
+            if any(isinstance(item, HederaIdentityError) for item in errors):
+                self._check(worker, Check.HEDERA, Outcome.FAIL, diagnostic)
             self._check(worker, Check.SNAPSHOTS, Outcome.FAIL if reason == Reason.MARKET_IDENTITY_MISMATCH
                         else Outcome.UNKNOWN, diagnostic)
             return diagnostic, reason == Reason.MARKET_IDENTITY_MISMATCH
@@ -555,33 +485,26 @@ class Runtime:
         for index, (side, check) in enumerate(((Side.BUY, Check.BUY_GAS), (Side.SELL, Check.SELL_GAS))):
             gas = pool.gas[index] if len(pool.gas) == 2 else None
             try:
-                if (gas is None or gas.route_evidence is None or gas.route_evidence.rpc is None
-                        or gas.route_evidence.rpc.sender != engine.dex.estimate_sender or not pool.router_verified):
+                if gas is None or not pool.router_verified:
                     raise InvalidCycle(Reason.GAS_UNKNOWN)
                 budgets[side], _, evidence_id = engine._gas(gas, side, market, self.now())
             except InvalidCycle:
                 value = gas.estimation_error if gas else None
                 diagnostic = (Diagnostic(value) if value in Diagnostic._value2member_map_
+                              else Diagnostic.ROUTE_CONTEXT_UNVERIFIED if not pool.router_verified
                               else Diagnostic.ROUTE_ESTIMATE_INVALID)
-                critical = diagnostic in CRITICAL_GAS
-                failures.append((diagnostic, critical))
-                self._check(worker, check, Outcome.FAIL if critical else Outcome.UNKNOWN, diagnostic)
+                failures.append(diagnostic)
+                self._check(worker, check, Outcome.UNKNOWN, diagnostic)
             else:
+                basis = gas.route_evidence.configured
+                estimated = gas_cost_tinybars(gas.execution_gas, basis.gas_price_weibars)
                 self._check(worker, check, Outcome.PASS, evidence_id=evidence_id,
-                            gas_units=gas.execution_gas, capped_tinybars=budgets[side])
-        sender_failure = await self._sender_check(engine, public, worker, pool, budgets)
-        sender = self.readiness["checks"][Check.SENDER]
-        if "tokens" in sender and any(reason == Diagnostic.SENDER_ACCOUNT_NOT_FOUND for reason, _ in failures):
-            failures = [(Diagnostic.PROVIDER_DISAGREEMENT, False)
-                        if reason == Diagnostic.SENDER_ACCOUNT_NOT_FOUND else (reason, critical)
-                        for reason, critical in failures]
-            for check in (Check.BUY_GAS, Check.SELL_GAS):
-                if self.readiness["checks"][check]["reason"] == Diagnostic.SENDER_ACCOUNT_NOT_FOUND:
-                    self._check(worker, check, Outcome.UNKNOWN, Diagnostic.PROVIDER_DISAGREEMENT)
-        if sender_failure:
-            failures.append(sender_failure)
+                            gas_method=basis.source, gas_units=gas.execution_gas,
+                            gas_price_weibars=basis.gas_price_weibars, capped_tinybars=budgets[side],
+                            estimated_gas_hbar=str(Decimal(f"{estimated}e-8")),
+                            maximum_gas_hbar=str(Decimal(f"{budgets[side]}e-8")))
         if failures:
-            return next((failure for failure in failures if failure[1]), failures[0])
+            return failures[0], False
         try:
             engine._timing(pool, book, self.now())
             for index, side in enumerate((Side.BUY, Side.SELL)):
@@ -635,20 +558,15 @@ class Runtime:
             self._check(worker, Check.RECOVERY, Outcome.FAIL, Diagnostic.RECOVERY_UNRESOLVED)
             self._block(public, engine, worker, Diagnostic.RECOVERY_UNRESOLVED)
         self._check(worker, Check.RECOVERY, Outcome.PASS)
-        if not config.simulation.hedera_estimate_sender:
-            for check in (Check.SENDER, Check.BUY_GAS, Check.SELL_GAS):
-                self._check(worker, check, Outcome.FAIL, Diagnostic.SENDER_UNCONFIGURED)
-            self._block(public, engine, worker, Diagnostic.SENDER_UNCONFIGURED)
-
         for retry in range(len(STARTUP_RETRY_DELAYS) + 1):
             if not await self._network_slot(worker, reserve=True):
                 return False
             self.readiness["attempt"] = retry + 1
             for check in (Check.HEDERA, Check.KUCOIN, Check.WEBSOCKET, Check.REST, Check.SNAPSHOTS,
-                          Check.SENDER, Check.BUY_GAS, Check.SELL_GAS, Check.BALANCES):
+                          Check.BUY_GAS, Check.SELL_GAS, Check.BALANCES):
                 self.readiness["checks"][check] = {"outcome": Outcome.UNKNOWN, "reason": None, "at": None}
             self._readiness_state(public, engine, worker, ReadinessState.PREFLIGHT_CHECKING)
-            failure = await self._preflight_market(engine, public, worker)
+            failure = await self._preflight_market(engine, worker)
             if self._shutdown.is_set() or not self.tick(worker):
                 return False
             if failure is None:

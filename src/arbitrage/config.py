@@ -10,6 +10,11 @@ from pydantic import Field, ValidationError, field_validator, model_validator
 from .models import MAX_UNITS, Balance, Exact, Holding, Record, TRADE_HBAR, WORKER_CAPACITY
 
 
+DEFAULT_GAS_UNITS = 109_478
+DEFAULT_GAS_LIMIT = 300_000
+GasUnits = Annotated[int, Field(strict=True, gt=0, le=15_000_000)]
+
+
 class Simulation(Record):
     mode: Literal["simulation"]
     trade_hbar: Literal[TRADE_HBAR]
@@ -20,10 +25,19 @@ class Simulation(Record):
     minimum_profit_usdt: Annotated[Exact, Field(gt=0)]
     maximum_loss_usdt: Annotated[Exact, Field(gt=0)]
     slippage_fraction: Annotated[Exact, Field(ge=0, lt=1)]
+    buy_gas_units: GasUnits = DEFAULT_GAS_UNITS
+    sell_gas_units: GasUnits = DEFAULT_GAS_UNITS
+    gas_limit: GasUnits = DEFAULT_GAS_LIMIT
     gas_price_cap_multiple: Annotated[Exact, Field(ge=1)]
     cex_fee_fraction: Annotated[Exact, Field(ge=0, lt=1)]
     usdc_usdt_parity: Literal[True]
     hedera_estimate_sender: Annotated[str, Field(strict=True, pattern=r"^0x[0-9a-fA-F]{40}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_gas_limit(self) -> "Simulation":
+        if max(self.buy_gas_units, self.sell_gas_units) > self.gas_limit:
+            raise ValueError("configured gas units must fit the gas limit")
+        return self
 
     @field_validator("hedera_estimate_sender")
     @classmethod

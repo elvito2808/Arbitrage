@@ -92,7 +92,7 @@ def test_foreground_lock_fences_another_process_and_pause_race(operations):
         }
     with runtime.owner():
         assert runtime.activate("resume", None, config)[0] == "worker-1"
-        assert sum(value == "running" for value in runtime.status()["workers"].values()) == 1
+        assert runtime.status()["workers"]["worker-1"] == "stopped"
 
 
 def test_unexpected_exit_freezes_config_and_records_abandoned_cycle(operations):
@@ -266,10 +266,11 @@ def test_deadline_cancels_cycle_interval_sleep(operations, monkeypatch, kucoin_o
     asyncio.run(run())
 
 
-def test_actual_p03_adapters_and_production_engine_unknown_gas(operations, monkeypatch, funded_sender):
+def test_actual_p03_adapters_and_production_engine_unknown_gas(operations, monkeypatch):
     original, config, clock = operations
     clock[0] = POOL_TIME + timedelta(seconds=1)
     hedera, exchange = Hedera(), Exchange()
+    hedera.gas_down = True
     exchange.depth["time"] = int(POOL_TIME.timestamp() * 1000)
     monkeypatch.setattr(PublicConnections, "rpc", lambda self, *args: hedera.rpc(*args))
     monkeypatch.setattr(PublicConnections, "mirror_block", lambda self, *args: hedera.mirror_block(*args))
@@ -301,7 +302,7 @@ def test_actual_p03_adapters_and_production_engine_unknown_gas(operations, monke
     assert any(event.get("source") == "rest" for event in health["recent_events"])
     events = health["recent_events"]
     assert any(event.get("state") == "WAITING_RETRY"
-               and event.get("diagnostic") == "route_estimate_unavailable" for event in events)
+               and event.get("diagnostic") == "gas_price_unavailable" for event in events)
     assert all(event["event"] != "analysis" for event in events)
 
 

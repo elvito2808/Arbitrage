@@ -102,36 +102,30 @@ def capture(startup, monkeypatch, *, limit=1, blocked=False, scenario=None, leve
     return runtime, stream, sink
 
 
-@pytest.mark.parametrize("case", ["retry", "missing_associations", "unavailable_gas"])
+@pytest.mark.parametrize("case", ["retry", "no_wallet", "unavailable_gas"])
 def test_clm_t01_startup(startup, monkeypatch, case):
     replay = startup[0]
     if case == "retry":
         replay.timeout_attempts = {1}
-    elif case == "missing_associations":
-        replay.sender_mode = "missing"
-    else:
-        from arbitrage.market_data import Unavailable
-        original = replay.rpc
-
-        async def without_sell_estimate(method, *params):
-            if method == "eth_estimateGas" and params[0]["data"].startswith("0x38ed1739"):
-                raise Unavailable("offline relay unavailable")
-            return await original(method, *params)
-
-        monkeypatch.setattr(replay, "rpc", without_sell_estimate)
-    runtime, stream, _ = capture(startup, monkeypatch, blocked=case != "retry")
+    elif case == "unavailable_gas":
+        replay.gas_down = True
+    runtime, stream, _ = capture(startup, monkeypatch, blocked=case == "unavailable_gas")
     output = stream.getvalue()
     evidence(case, stream)
     assert output.index("STARTING") < output.index("PREFLIGHT_CHECKING")
     if case == "retry":
         assert output.index("WAITING_RETRY") < output.index(" READY") < output.index(" RUNNING")
         assert "delay_seconds=15" in output and "provider_timeout" in output
-    else:
-        if case == "unavailable_gas":
-            assert "retry_exhausted=True" in output
+    elif case == "unavailable_gas":
+        assert "retry_exhausted=True" in output
         assert "STARTUP_BLOCKED" in output and " RUNNING" not in output and "Analysis started" not in output
         assert runtime.status()["analysis_cycles"] == 0
-        assert ("missing_token_association" if case == "missing_associations" else "route_estimate_unavailable") in output
+        assert "gas_price_unavailable" in output
+    else:
+        assert "gas_method=CONFIGURED_GAS_UNITS + LIVE_RPC_GAS_PRICE" in output
+        assert "buy_gas_units=109478 sell_gas_units=109478 gas_limit=300000" in output
+        assert "gas_price_weibars=1630000000000" in output
+        assert "estimated_gas_hbar=0.17844914 maximum_gas_hbar=0.35689828" in output
 
 
 def test_clm_t02_ten_cycles_and_shutdown(startup, monkeypatch):
@@ -149,7 +143,7 @@ def test_clm_t02_ten_cycles_and_shutdown(startup, monkeypatch):
 def test_clm_t03_persisted_values_and_unknown(startup, monkeypatch):
     def change(runtime, status):
         if status["analysis_cycles"] == 1:
-            startup[0].reject = "0x38ed1739"
+            startup[0].invalid_price = True
 
     runtime, stream, _ = capture(startup, monkeypatch, limit=2, change=change)
     with runtime.storage.transaction() as tx:
@@ -379,7 +373,7 @@ def test_clm_t09_level_utc_correlation_and_summary(startup, monkeypatch, level):
 def test_clm_t10_offline_no_unexpected_network(startup, monkeypatch):
     runtime, stream, _ = capture(startup, monkeypatch)
     replay = startup[0]
-    assert replay.estimates == ["0x8803dbee", "0x38ed1739"] * 2
+    assert replay.gas_price_reads == 2
     assert "real trading disabled" in stream.getvalue()
     with runtime.storage.transaction() as tx:
         assert tx._db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

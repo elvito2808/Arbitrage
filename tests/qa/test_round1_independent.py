@@ -20,19 +20,13 @@ from test_p07_integration import ReplaySession, Response
 
 
 CONFIG = Path(__file__).resolve().parents[2] / "config" / "simulation.toml"
-SENDER = "0x000000000000000000000000000000000000aa55"
-USDC = 0x6F89A
-WHBAR = 0x163B5A
-GAS_BUY = 156_000
-GAS_SELL = 153_192
-ROUTER = "0x00000000000000000000000000000000002e7a5d"
 DEPTH_TOPIC = "/spotMarket/level2Depth5:HBAR-USDT"
 
 
 class PublicReplay(ReplaySession):
     def __init__(self, *, reject_gas=False):
         super().__init__()
-        self.estimates = []
+        self.gas_price_reads = 0
         self.expect_token = "ephemeral-public-bootstrap-fixture"
         self.reject_gas = reject_gas
         self.websocket_closed = False
@@ -42,35 +36,12 @@ class PublicReplay(ReplaySession):
 
     @asynccontextmanager
     async def request(self, method, url, *, json, allow_redirects):
-        if url == RPC and json["method"] == "eth_estimateGas":
-            assert not allow_redirects
-            assert method == "POST"
+        if url == RPC and json["method"] == "eth_gasPrice":
+            assert not allow_redirects and method == "POST" and not json["params"]
             self.requests.append((method, url))
-            call = json["params"][0]
-            assert call["to"] == ROUTER
-            assert call["from"] == SENDER
-            assert "value" not in call or int(call["value"], 16) == 0
-            selector = call["data"][:10]
-            abi = [int(call["data"][i:i + 64], 16) for i in range(10, len(call["data"]), 64)]
-            assert len(abi) == 8
-            assert abi[0] == 100_000_000_000
-            assert abi[2:4] == [160, int(SENDER, 16)]
-            assert abi[4] > int(POOL_TIME.timestamp())
-            assert abi[5] == 2
-            if selector == "0x8803dbee":
-                assert abi[1] == 53_025_571 and abi[6:] == [USDC, WHBAR]
-                gas = GAS_BUY
-            else:
-                assert selector == "0x38ed1739"
-                assert abi[1] == 52_155_926 and abi[6:] == [WHBAR, USDC]
-                gas = GAS_SELL
-            self.estimates.append(selector)
-            response = {"jsonrpc": "2.0", "id": json["id"]}
-            if self.reject_gas:
-                response["error"] = {"code": 3, "message": "fixture estimate reverted"}
-            else:
-                response["result"] = hex(gas)
-            yield Response(response)
+            self.gas_price_reads += 1
+            yield Response({"jsonrpc": "2.0", "id": json["id"],
+                            "result": "0x0" if self.reject_gas else hex(1_630_000_000_000)})
             return
         if url == f"{KUCOIN}/api/v1/bullet-public":
             assert method == "POST"
@@ -142,7 +113,7 @@ class SocketReplay:
         self.session.websocket_closed = True
 
 
-def test_independent_foreground_websocket_and_route_gas_reconcile(tmp_path, monkeypatch, funded_sender):
+def test_independent_foreground_websocket_and_configured_gas_reconcile(tmp_path, monkeypatch):
     def forbid_network(*args, **kwargs):
         raise AssertionError("expected deterministic transport")
 
@@ -151,10 +122,7 @@ def test_independent_foreground_websocket_and_route_gas_reconcile(tmp_path, monk
     fake = PublicReplay()
     monkeypatch.setattr("arbitrage.runtime.aiohttp.ClientSession", lambda **kwargs: fake)
 
-    settings = load_config(CONFIG)
-    config = settings.model_copy(update={"simulation": settings.simulation.model_copy(
-        update={"hedera_estimate_sender": SENDER},
-    )})
+    config = load_config(CONFIG)
     clock = [POOL_TIME + timedelta(seconds=1)]
     before_recovery = asyncio.Event()
     completed_sleep = asyncio.Event()
@@ -203,7 +171,7 @@ def test_independent_foreground_websocket_and_route_gas_reconcile(tmp_path, monk
                     assert db.execute("SELECT COUNT(*) FROM reservations").fetchone() == (3,)
                     assert db.execute(
                         "SELECT units FROM reservations WHERE holding = ?", (Holding.DEX_HBAR.value,),
-                    ).fetchone() == (3 * GAS_BUY * 326,)
+                    ).fetchone() == (3 * 109_478 * 326,)
                     assert db.execute("SELECT COUNT(*) FROM ledger").fetchone() == (0,)
                     assert_integrity(db)
                 status = runtime.status()
@@ -229,10 +197,8 @@ def test_independent_foreground_websocket_and_route_gas_reconcile(tmp_path, monk
                 await asyncio.gather(worker, return_exceptions=True)
 
     asyncio.run(run())
-    gas_tinybars = GAS_BUY * 163
-    assert set(fake.estimates[:2]) == {
-        "0x8803dbee", "0x38ed1739",
-    }
+    gas_tinybars = 109_478 * 163
+    assert fake.gas_price_reads >= 2
     expected = {
         Holding.DEX_HBAR.value: -gas_tinybars,
         Holding.DEX_WHBAR.value: 100_000_000_000,
@@ -257,7 +223,7 @@ def test_independent_foreground_websocket_and_route_gas_reconcile(tmp_path, monk
         assert eligible[0]["requested_cex"]["quote_units"] == 54_875_070
 
 
-def test_independent_foreground_websocket_and_failed_route_estimates_do_not_post(tmp_path, monkeypatch, funded_sender):
+def test_independent_foreground_websocket_and_invalid_gas_price_do_not_post(tmp_path, monkeypatch):
     def forbid_network(*args, **kwargs):
         raise AssertionError("expected deterministic transport")
 
@@ -265,10 +231,7 @@ def test_independent_foreground_websocket_and_failed_route_estimates_do_not_post
     monkeypatch.setattr(socket.socket, "connect_ex", forbid_network)
     fake = PublicReplay(reject_gas=True)
     monkeypatch.setattr("arbitrage.runtime.aiohttp.ClientSession", lambda **kwargs: fake)
-    settings = load_config(CONFIG)
-    config = settings.model_copy(update={"simulation": settings.simulation.model_copy(
-        update={"hedera_estimate_sender": SENDER},
-    )})
+    config = load_config(CONFIG)
     cycle_finished = asyncio.Event()
 
     async def block_after_cycle(delay):
@@ -293,7 +256,7 @@ def test_independent_foreground_websocket_and_failed_route_estimates_do_not_post
                 await asyncio.gather(worker, return_exceptions=True)
 
     asyncio.run(run())
-    assert set(fake.estimates) == {"0x8803dbee", "0x38ed1739"}
+    assert fake.gas_price_reads >= 1
     assert fake.websocket_closed
     with sqlite3.connect(runtime.storage.path) as db:
         assert db.execute("SELECT * FROM balances ORDER BY holding").fetchall() == opening
@@ -304,7 +267,7 @@ def test_independent_foreground_websocket_and_failed_route_estimates_do_not_post
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_independent_disconnected_snapshot_cannot_be_admitted(tmp_path, monkeypatch, funded_sender):
+def test_independent_disconnected_snapshot_cannot_be_admitted(tmp_path, monkeypatch):
     def forbid_network(*args, **kwargs):
         raise AssertionError("expected deterministic transport")
 
@@ -312,10 +275,7 @@ def test_independent_disconnected_snapshot_cannot_be_admitted(tmp_path, monkeypa
     monkeypatch.setattr(socket.socket, "connect_ex", forbid_network)
     fake = PublicReplay()
     monkeypatch.setattr("arbitrage.runtime.aiohttp.ClientSession", lambda **kwargs: fake)
-    settings = load_config(CONFIG)
-    config = settings.model_copy(update={"simulation": settings.simulation.model_copy(
-        update={"hedera_estimate_sender": SENDER},
-    )})
+    config = load_config(CONFIG)
     cycle_finished = asyncio.Event()
     snapshot = KuCoin.snapshot
 
@@ -350,7 +310,7 @@ def test_independent_disconnected_snapshot_cannot_be_admitted(tmp_path, monkeypa
                 await asyncio.gather(worker, return_exceptions=True)
 
     asyncio.run(run())
-    assert set(fake.estimates) == {"0x8803dbee", "0x38ed1739"}
+    assert fake.gas_price_reads >= 1
     assert fake.websocket_closed
     with sqlite3.connect(runtime.storage.path) as db:
         assert db.execute("SELECT * FROM balances ORDER BY holding").fetchall() == opening

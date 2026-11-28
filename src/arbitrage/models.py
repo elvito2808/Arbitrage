@@ -244,6 +244,25 @@ class HederaGasProvenance(Record):
     estimated_at: Timestamp
 
 
+GAS_SOURCE = "CONFIGURED_GAS_UNITS + LIVE_RPC_GAS_PRICE"
+
+
+class ConfiguredGasProvenance(Record):
+    source: Literal[GAS_SOURCE] = GAS_SOURCE
+    provider: Identifier
+    chain_id: Literal[295]
+    configured_gas_units: PositiveUnits
+    gas_limit: PositiveUnits
+    gas_price_weibars: PositiveUnits
+    price_observed_at: Timestamp
+
+    @model_validator(mode="after")
+    def validate_limit(self) -> "ConfiguredGasProvenance":
+        if self.configured_gas_units > self.gas_limit:
+            raise ValueError("configured gas units must fit the gas limit")
+        return self
+
+
 class Evaluation(Record):
     direction: Direction
     status: EvaluationStatus
@@ -257,6 +276,7 @@ class Evaluation(Record):
     gas_evidence_id: Identifier | None = None
     gas_budget_tinybars: PositiveUnits | None = None
     gas_rpc: HederaGasProvenance | None = None
+    configured_gas: ConfiguredGasProvenance | None = None
     gas_estimation_error: Identifier | None = None
     dex_net_quote_usdc: Exact | None = None
     estimated_gas_hbar: Exact | None = None

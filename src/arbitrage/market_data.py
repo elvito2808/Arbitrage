@@ -32,33 +32,6 @@ class MarketIdentityError(MarketDataError):
     """Provider state contradicts a required network or market identity."""
 
 
-class RpcRejection(MarketDataError):
-    def __init__(self, status: str):
-        super().__init__("RPC read failed")
-        self.status = status
-
-
-def estimation_rejection(data: object) -> RpcRejection | None:
-    if not isinstance(data, dict):
-        return None
-    message = data.get("message")
-    if not isinstance(message, str):
-        return None
-    if data.get("code") == -32000 and message.endswith(
-        "Error occurred during transaction simulation: Sender account not found."
-    ):
-        return RpcRejection("sender_account_not_found")
-    if data.get("code") == 3:
-        status = message.rsplit(", ", 1)[-1]
-        if status in {
-            "TOKEN_NOT_ASSOCIATED_TO_ACCOUNT", "INSUFFICIENT_TOKEN_BALANCE",
-            "SPENDER_DOES_NOT_HAVE_ALLOWANCE", "AMOUNT_EXCEEDS_ALLOWANCE",
-            "INSUFFICIENT_PAYER_BALANCE",
-        }:
-            return RpcRejection(status)
-    return None
-
-
 class StaleSnapshot(MarketDataError):
     """Snapshot time exceeds the freshness or clock skew limit."""
 
@@ -160,16 +133,6 @@ class PublicConnections:
                                     raise ProviderRateLimited("public HTTP 429")
                                 if response.status in (408, 500, 502, 503, 504):
                                     raise Unavailable(f"public HTTP {response.status}")
-                                if (
-                                    response.status == 400 and payload
-                                    and payload.get("method") == "eth_estimateGas"
-                                ):
-                                    data = await response.json()
-                                    if (isinstance(data, dict) and data.get("jsonrpc") == "2.0"
-                                            and data.get("id") == payload["id"]):
-                                        rejection = estimation_rejection(data.get("error"))
-                                        if rejection:
-                                            raise rejection
                                 if response.status != 200:
                                     raise MarketDataError(f"public HTTP {response.status}")
                                 data = await response.json()
@@ -225,7 +188,7 @@ class PublicConnections:
                 await socket.close()
 
     async def rpc(self, method: str, *params: object) -> Any:
-        if method not in {"eth_chainId", "eth_getBlockByNumber", "eth_gasPrice", "eth_estimateGas", "eth_call"}:
+        if method not in {"eth_chainId", "eth_getBlockByNumber", "eth_gasPrice", "eth_call"}:
             raise MarketDataError("RPC method is outside the public read scope")
         request_id = next(self._ids)
         data = await self._json("POST", RPC, {
@@ -233,21 +196,9 @@ class PublicConnections:
         })
         if data.get("jsonrpc") != "2.0" or data.get("id") != request_id:
             raise MarketDataError("RPC response identity mismatch")
-        if method == "eth_estimateGas" and (rejection := estimation_rejection(data.get("error"))):
-            raise rejection
         if data.get("result") is None or "error" in data:
             raise MarketDataError("RPC read failed")
         return data["result"]
-
-    async def mirror_sender(self, address: str, router_id: str) -> tuple[dict, dict, dict]:
-        base = f"{MIRROR}/accounts/{address}"
-        async with asyncio.TaskGroup() as group:
-            account = group.create_task(self._json("GET", base))
-            tokens = group.create_task(self._json("GET", f"{base}/tokens?limit=100"))
-            allowances = group.create_task(
-                self._json("GET", f"{base}/allowances/tokens?spender.id={router_id}&limit=100"),
-            )
-        return account.result(), tokens.result(), allowances.result()
 
     async def mirror_block(self, number: int) -> dict:
         return await self._json("GET", f"{MIRROR}/blocks/{number}")
